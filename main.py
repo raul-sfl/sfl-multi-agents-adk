@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from ws.handler import websocket_endpoint
-import config  # Ensures genai.configure() is called on startup
+import config  # Must be imported first to set env vars before ADK initializes
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 

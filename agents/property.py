@@ -1,9 +1,10 @@
 import json
-from orchestrator.types import Agent
+from google.adk.agents import LlmAgent
+from google.adk.tools.tool_context import ToolContext
 from mock_data.properties import PROPERTIES, PROPERTY_ALIASES
 from agents.constants import STAYFORLONG_CONTACT, STAYFORLONG_BASE_URL
+import config
 
-# Stayforlong listing URLs for each property
 PROPERTY_URLS = {
     "PROP-BCN-001": f"{STAYFORLONG_BASE_URL}/apartamentos-barcelona/gran-via",
     "PROP-MAD-003": f"{STAYFORLONG_BASE_URL}/apartamentos-madrid/salamanca",
@@ -16,12 +17,10 @@ def _find_property(name_or_id: str) -> dict | None:
     key = name_or_id.upper()
     if key in PROPERTIES:
         return PROPERTIES[key]
-    # Try alias lookup (case-insensitive partial match)
     lower = name_or_id.lower().strip()
     prop_id = PROPERTY_ALIASES.get(lower)
     if prop_id:
         return PROPERTIES.get(prop_id)
-    # Partial match in aliases
     for alias, pid in PROPERTY_ALIASES.items():
         if alias in lower or lower in alias:
             return PROPERTIES.get(pid)
@@ -153,17 +152,18 @@ def get_checkin_info(property_id: str) -> str:
     return json.dumps(info)
 
 
-def transfer_to_triage():
-    """Transfer the conversation back to the main assistant for a different topic."""
-    from agents.triage import triage_agent
-    return triage_agent
+def transfer_to_triage(tool_context: ToolContext) -> dict:
+    """Transfer the conversation back to the main Stayforlong assistant for a different topic."""
+    tool_context.actions.transfer_to_agent = "Triage"
+    return {"status": "transferred"}
 
 
 _contact = STAYFORLONG_CONTACT
 
-property_agent = Agent(
+property_agent = LlmAgent(
     name="Alojamientos",
-    instructions=(
+    model=config.GEMINI_MODEL,
+    instruction=(
         "You are the accommodation specialist for Stayforlong, a long-stay apartment platform. "
         "Always respond in the same language the user writes in (Spanish or English).\n\n"
 

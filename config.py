@@ -1,16 +1,20 @@
 import os
-import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# AI Studio API key — mapped to GOOGLE_API_KEY which ADK reads automatically
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+if GEMINI_API_KEY and not os.environ.get("GOOGLE_API_KEY"):
+    os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-GENERATION_CONFIG = {
-    "temperature": 0.3,
-    "max_output_tokens": 1024,
-}
+# Vertex AI (optional) — set GOOGLE_GENAI_USE_VERTEXAI=true to use Vertex instead of AI Studio
+# Also requires: GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION
+# Local auth: gcloud auth application-default login
+# Railway: set GOOGLE_APPLICATION_CREDENTIALS to service account JSON path
+_use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
+if _use_vertex:
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")

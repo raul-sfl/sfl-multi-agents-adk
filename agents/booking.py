@@ -1,7 +1,9 @@
 import json
-from orchestrator.types import Agent, Result
+from google.adk.agents import LlmAgent
+from google.adk.tools.tool_context import ToolContext
 from mock_data.reservations import RESERVATIONS, EMAIL_INDEX, CANCELLATION_POLICIES
 from agents.constants import STAYFORLONG_CONTACT
+import config
 
 
 def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
@@ -16,7 +18,6 @@ def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
                        "Por favor verifica el número de reserva.",
         })
 
-    # Non-sensitive info — always available with just the booking ID
     public_info = {
         "found": True,
         "booking_id": res["booking_id"],
@@ -37,7 +38,6 @@ def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
         )
         return json.dumps(public_info)
 
-    # Identity verification
     stored_name = res["guest_name"].lower()
     provided_name = guest_name.strip().lower()
     name_match = provided_name in stored_name or stored_name in provided_name
@@ -52,7 +52,6 @@ def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
             ),
         })
 
-    # Full info after successful verification
     public_info.update({
         "identity_verified": True,
         "guest_name": res["guest_name"],
@@ -98,17 +97,18 @@ def check_cancellation_policy(booking_id: str) -> str:
     })
 
 
-def transfer_to_triage():
-    """Transfer the conversation back to the main assistant for a different topic."""
-    from agents.triage import triage_agent
-    return triage_agent
+def transfer_to_triage(tool_context: ToolContext) -> dict:
+    """Transfer the conversation back to the main Stayforlong assistant for a different topic."""
+    tool_context.actions.transfer_to_agent = "Triage"
+    return {"status": "transferred"}
 
 
 _contact = STAYFORLONG_CONTACT
 
-booking_agent = Agent(
-    name="Booking Agent",
-    instructions=(
+booking_agent = LlmAgent(
+    name="Booking",
+    model=config.GEMINI_MODEL,
+    instruction=(
         "You are the reservations specialist for Stayforlong. Always respond in the same language "
         "the user writes in (Spanish or English).\n\n"
 

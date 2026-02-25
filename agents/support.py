@@ -1,8 +1,10 @@
 import json
 import uuid
-from orchestrator.types import Agent, Result
+from google.adk.agents import LlmAgent
+from google.adk.tools.tool_context import ToolContext
 from mock_data.incidents import INCIDENTS, INCIDENT_CATEGORIES, runtime_incidents
 from agents.constants import STAYFORLONG_CONTACT
+import config
 
 
 def lookup_incident(ticket_id: str) -> str:
@@ -75,17 +77,18 @@ def escalate_to_human(reason: str) -> str:
     })
 
 
-def transfer_to_triage():
-    """Transfer the conversation back to the main assistant for a different topic."""
-    from agents.triage import triage_agent
-    return triage_agent
+def transfer_to_triage(tool_context: ToolContext) -> dict:
+    """Transfer the conversation back to the main Stayforlong assistant for a different topic."""
+    tool_context.actions.transfer_to_agent = "Triage"
+    return {"status": "transferred"}
 
 
 _contact = STAYFORLONG_CONTACT
 
-support_agent = Agent(
-    name="Support Agent",
-    instructions=(
+support_agent = LlmAgent(
+    name="Support",
+    model=config.GEMINI_MODEL,
+    instruction=(
         "You are the support agent for Stayforlong. Always respond in the same language "
         "the user writes in (Spanish or English).\n\n"
 
