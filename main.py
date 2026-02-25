@@ -13,6 +13,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+# Silence verbose INFO from Google AI/ADK internals — keep WARNING+ only
+logging.getLogger("google_genai").setLevel(logging.WARNING)
+logging.getLogger("google_adk").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -40,6 +43,8 @@ async def health():
     return {
         "status": "ok",
         "model": config.GEMINI_MODEL,
+        "backend": "vertex_ai" if config.USE_VERTEX_AI else "ai_studio",
+        "project": config.GOOGLE_CLOUD_PROJECT if config.USE_VERTEX_AI else None,
         "api_key_configured": bool(config.GEMINI_API_KEY),
     }
 
