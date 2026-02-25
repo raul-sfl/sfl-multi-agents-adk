@@ -1,6 +1,6 @@
 import json
 from google.adk.agents import LlmAgent
-from google.adk.tools.tool_context import ToolContext
+from agents.utils import transfer_to_triage
 from mock_data.properties import PROPERTIES, PROPERTY_ALIASES
 from agents.constants import STAYFORLONG_CONTACT, STAYFORLONG_BASE_URL
 import config
@@ -150,12 +150,6 @@ def get_checkin_info(property_id: str) -> str:
         info["self_checkin_method"] = prop["self_checkin_method"]
 
     return json.dumps(info)
-
-
-def transfer_to_triage(tool_context: ToolContext) -> dict:
-    """Transfer the conversation back to the main Stayforlong assistant for a different topic."""
-    tool_context.actions.transfer_to_agent = "Triage"
-    return {"status": "transferred"}
 
 
 _contact = STAYFORLONG_CONTACT

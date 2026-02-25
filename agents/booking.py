@@ -1,6 +1,6 @@
 import json
 from google.adk.agents import LlmAgent
-from google.adk.tools.tool_context import ToolContext
+from agents.utils import transfer_to_triage
 from mock_data.reservations import RESERVATIONS, EMAIL_INDEX, CANCELLATION_POLICIES
 from agents.constants import STAYFORLONG_CONTACT
 import config
@@ -95,12 +95,6 @@ def check_cancellation_policy(booking_id: str) -> str:
         "current_status": res["status"],
         "note": "Cancellation deadline is only shown after identity verification.",
     })
-
-
-def transfer_to_triage(tool_context: ToolContext) -> dict:
-    """Transfer the conversation back to the main Stayforlong assistant for a different topic."""
-    tool_context.actions.transfer_to_agent = "Triage"
-    return {"status": "transferred"}
 
 
 _contact = STAYFORLONG_CONTACT

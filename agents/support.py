@@ -1,7 +1,7 @@
 import json
 import uuid
 from google.adk.agents import LlmAgent
-from google.adk.tools.tool_context import ToolContext
+from agents.utils import transfer_to_triage
 from mock_data.incidents import INCIDENTS, INCIDENT_CATEGORIES, runtime_incidents
 from agents.constants import STAYFORLONG_CONTACT
 import config
@@ -75,12 +75,6 @@ def escalate_to_human(reason: str) -> str:
         "whatsapp_notification_sent": True,
         "estimated_response_time": "5-10 minutos",
     })
-
-
-def transfer_to_triage(tool_context: ToolContext) -> dict:
-    """Transfer the conversation back to the main Stayforlong assistant for a different topic."""
-    tool_context.actions.transfer_to_agent = "Triage"
-    return {"status": "transferred"}
 
 
 _contact = STAYFORLONG_CONTACT

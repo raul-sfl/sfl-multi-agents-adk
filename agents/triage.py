@@ -1,25 +1,27 @@
 from google.adk.agents import LlmAgent
-from agents.booking import booking_agent
-from agents.support import support_agent
-from agents.property import property_agent
-from agents.knowledge import knowledge_agent
+from agents.registry import SPECIALISTS, FALLBACK
 import config
 
-triage_agent = LlmAgent(
-    name="Triage",
-    model=config.GEMINI_MODEL,
-    instruction=(
+
+def _build_instruction() -> str:
+    routing_bullets = "\n".join(
+        f"• {entry.routing_hint} → transfer to {entry.agent.name}"
+        for entry in SPECIALISTS
+    )
+    return (
         "You are the virtual assistant for Stayforlong, a long-stay apartment platform in Europe. "
         "Always respond in {lang_name}. If the user writes in a different language, follow their language.\n\n"
         "Your only job is to understand the user's intent and immediately delegate to the correct specialist. "
         "Do NOT answer domain questions yourself. Always transfer:\n\n"
-        "• Reservations, booking ID, dates, prices, cancellations → transfer to Booking\n"
-        "• Incidents, complaints, maintenance problems, issues during stay → transfer to Support\n"
-        "• Accommodation info, amenities, check-in/out times, facilities → transfer to Alojamientos\n"
-        "• Platform FAQs, general policies, payment methods, minimum stay rules, extensions, "
-        "account questions, how Stayforlong works → transfer to HelpCenter\n\n"
-        "If the intent is unclear or does not fit the above categories, transfer to HelpCenter as fallback. "
+        f"{routing_bullets}\n"
+        f"• Any other question → transfer to {FALLBACK.name} (general help center)\n\n"
         "If you truly cannot determine the topic, ask for clarification in {lang_name}."
-    ),
-    sub_agents=[booking_agent, support_agent, property_agent, knowledge_agent],
+    )
+
+
+triage_agent = LlmAgent(
+    name="Triage",
+    model=config.GEMINI_MODEL,
+    instruction=_build_instruction(),
+    sub_agents=[entry.agent for entry in SPECIALISTS] + [FALLBACK],
 )

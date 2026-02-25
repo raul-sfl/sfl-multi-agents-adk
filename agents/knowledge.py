@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from google.adk.agents import LlmAgent
-from google.adk.tools.tool_context import ToolContext
+from agents.utils import transfer_to_triage
 from agents.constants import STAYFORLONG_CONTACT
 import config
 
@@ -84,13 +84,6 @@ def query_help_center(question: str) -> str:
             "No he podido consultar el centro de ayuda en este momento. "
             f"Por favor contacta con Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
         )
-
-
-def transfer_to_triage(tool_context: ToolContext) -> dict:
-    """Transfer the conversation back to the main Stayforlong assistant for booking,
-    incident or property questions."""
-    tool_context.actions.transfer_to_agent = "Triage"
-    return {"status": "transferred"}
 
 
 knowledge_agent = LlmAgent(
