@@ -24,6 +24,7 @@ USE_VERTEX_AI = _use_vertex
 GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
 
-# Vertex AI Agent Builder — HelpCenter agent
-# Format: projects/PROJECT_ID/locations/LOCATION/agents/AGENT_ID
-HELP_CENTER_AGENT_ID = os.environ.get("HELP_CENTER_AGENT_ID", "")
+# Vertex AI Search — HelpCenter knowledge base
+# Engine ID from: Agent Builder → Vertex AI Search → your app → Settings
+# Example: stayforlong-help-center_1234567890123
+HELP_CENTER_SEARCH_ENGINE_ID = os.environ.get("HELP_CENTER_SEARCH_ENGINE_ID", "")

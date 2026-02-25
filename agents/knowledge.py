@@ -10,75 +10,79 @@ logger = logging.getLogger(__name__)
 _contact = STAYFORLONG_CONTACT
 
 
-async def _call_vertex_agent(session_id: str, text: str, language_code: str = "es") -> str:
-    """Call the Vertex AI Agent Builder conversational agent via Dialogflow CX API."""
-    if not config.HELP_CENTER_AGENT_ID:
-        return (
-            "El servicio de ayuda no está configurado aún. "
-            f"Contacta con Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
-        )
+async def _search_vertex(query: str) -> str:
+    """Query Vertex AI Search and return the LLM-generated summary."""
+    if not config.HELP_CENTER_SEARCH_ENGINE_ID:
+        return ""  # Caller will use fallback contact message
 
-    try:
-        from google.cloud.dialogflowcx_v3beta1.services.sessions import SessionsAsyncClient
-        from google.cloud.dialogflowcx_v3beta1.types import (
-            DetectIntentRequest,
-            QueryInput,
-            TextInput,
-        )
+    from google.cloud import discoveryengine_v1 as discoveryengine
 
-        location = config.GOOGLE_CLOUD_LOCATION or "us-central1"
-        client = SessionsAsyncClient(
-            client_options={"api_endpoint": f"{location}-dialogflow.googleapis.com"}
-        )
-
-        session_path = f"{config.HELP_CENTER_AGENT_ID}/sessions/{session_id}"
-        request = DetectIntentRequest(
-            session=session_path,
-            query_input=QueryInput(
-                text=TextInput(text=text),
-                language_code=language_code,
+    client = discoveryengine.SearchServiceAsyncClient()
+    serving_config = (
+        f"projects/{config.GOOGLE_CLOUD_PROJECT}"
+        f"/locations/global/collections/default_collection"
+        f"/engines/{config.HELP_CENTER_SEARCH_ENGINE_ID}"
+        f"/servingConfigs/default_config"
+    )
+    request = discoveryengine.SearchRequest(
+        serving_config=serving_config,
+        query=query,
+        page_size=5,
+        content_search_spec=discoveryengine.SearchRequest.ContentSearchSpec(
+            summary_spec=discoveryengine.SearchRequest.ContentSearchSpec.SummarySpec(
+                summary_result_count=3,
+                language_code="es",
             ),
-        )
+            snippet_spec=discoveryengine.SearchRequest.ContentSearchSpec.SnippetSpec(
+                return_snippet=True,
+            ),
+        ),
+    )
+    response = await client.search(request)
 
-        response = await client.detect_intent(request=request)
-        for msg in response.query_result.response_messages:
-            if msg.text and msg.text.text:
-                return msg.text.text[0]
+    # Prefer AI-generated summary from the search results
+    if response.summary and response.summary.summary_text:
+        return response.summary.summary_text
 
-        return (
-            "No he encontrado información específica sobre eso en nuestro centro de ayuda. "
-            f"Puedes contactar con nuestro equipo: 📞 {_contact['phone']} | ✉️ {_contact['email']} | {_contact['hours']}"
-        )
+    # Fallback: collect top snippets from individual results
+    snippets = []
+    for result in response.results:
+        doc = result.document
+        if doc.derived_struct_data:
+            for s in doc.derived_struct_data.get("snippets", []):
+                text = s.get("snippet", "").strip()
+                if text:
+                    snippets.append(text)
+        if len(snippets) >= 3:
+            break
 
-    except Exception as exc:
-        logger.error("Error calling Vertex AI Agent Builder: %s", exc)
-        return (
-            "No he podido consultar el centro de ayuda en este momento. "
-            f"Por favor contacta con Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
-        )
+    if snippets:
+        return "\n\n".join(snippets)
+
+    return ""
 
 
-def query_help_center(question: str, session_id: str = "default") -> str:
+def query_help_center(question: str) -> str:
     """Search the Stayforlong help center for FAQs, platform policies, payment methods,
-    minimum stay rules, extensions, cancellation policies and general platform questions.
+    minimum stay rules, stay extensions, cancellation policies and general platform questions.
     Accepts any question in Spanish or English."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Running inside an async context (e.g. uvicorn); schedule coroutine
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run, _call_vertex_agent(session_id, question)
-                )
-                return future.result(timeout=15)
-        else:
-            return loop.run_until_complete(_call_vertex_agent(session_id, question))
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, _search_vertex(question))
+            result = future.result(timeout=15)
+        if result:
+            return result
+        return (
+            "No he encontrado información específica sobre eso en el help center. "
+            f"Contacta con nuestro equipo: 📞 {_contact['phone']} | "
+            f"✉️ {_contact['email']} | {_contact['hours']}"
+        )
     except Exception as exc:
         logger.error("query_help_center failed: %s", exc)
         return (
-            "No he podido consultar el centro de ayuda. "
-            f"Contacta con Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
+            "No he podido consultar el centro de ayuda en este momento. "
+            f"Por favor contacta con Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
         )
 
 
@@ -94,7 +98,7 @@ knowledge_agent = LlmAgent(
     model=config.GEMINI_MODEL,
     instruction=(
         "You are the Stayforlong help center specialist. "
-        "You have access to our complete knowledge base via Vertex AI.\n\n"
+        "You have access to our complete knowledge base via Vertex AI Search.\n\n"
 
         "SCOPE — what you handle:\n"
         "✅ General platform questions: how Stayforlong works, what it is, who it's for\n"
