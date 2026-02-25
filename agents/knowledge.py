@@ -10,67 +10,54 @@ logger = logging.getLogger(__name__)
 _contact = STAYFORLONG_CONTACT
 
 
-async def _search_vertex(query: str) -> str:
-    """Query Vertex AI Search and return the LLM-generated summary."""
-    if not config.HELP_CENTER_SEARCH_ENGINE_ID:
+async def _call_agent(session_id: str, text: str, language_code: str = "es") -> str:
+    """Call the Vertex AI Agent Designer agent via Dialogflow CX detect_intent."""
+    if not config.HELP_CENTER_AGENT_ID:
         return ""  # Caller will use fallback contact message
 
-    from google.cloud import discoveryengine_v1 as discoveryengine
-
-    client = discoveryengine.SearchServiceAsyncClient()
-    serving_config = (
-        f"projects/{config.GOOGLE_CLOUD_PROJECT}"
-        f"/locations/global/collections/default_collection"
-        f"/engines/{config.HELP_CENTER_SEARCH_ENGINE_ID}"
-        f"/servingConfigs/default_config"
+    from google.cloud.dialogflowcx_v3beta1.services.sessions import SessionsAsyncClient
+    from google.cloud.dialogflowcx_v3beta1.types import (
+        DetectIntentRequest,
+        QueryInput,
+        TextInput,
     )
-    request = discoveryengine.SearchRequest(
-        serving_config=serving_config,
-        query=query,
-        page_size=5,
-        content_search_spec=discoveryengine.SearchRequest.ContentSearchSpec(
-            summary_spec=discoveryengine.SearchRequest.ContentSearchSpec.SummarySpec(
-                summary_result_count=3,
-                language_code="es",
-            ),
-            snippet_spec=discoveryengine.SearchRequest.ContentSearchSpec.SnippetSpec(
-                return_snippet=True,
-            ),
+
+    # Extract location from HELP_CENTER_AGENT_ID
+    # Format: projects/PROJECT/locations/LOCATION/agents/AGENT_ID
+    parts = config.HELP_CENTER_AGENT_ID.split("/")
+    location = parts[3] if len(parts) >= 6 else "us-central1"
+
+    client = SessionsAsyncClient(
+        client_options={"api_endpoint": f"{location}-dialogflow.googleapis.com"}
+    )
+    session_path = f"{config.HELP_CENTER_AGENT_ID}/sessions/{session_id}"
+    request = DetectIntentRequest(
+        session=session_path,
+        query_input=QueryInput(
+            text=TextInput(text=text),
+            language_code=language_code,
         ),
     )
-    response = await client.search(request)
+    response = await client.detect_intent(request=request)
 
-    # Prefer AI-generated summary from the search results
-    if response.summary and response.summary.summary_text:
-        return response.summary.summary_text
-
-    # Fallback: collect top snippets from individual results
-    snippets = []
-    for result in response.results:
-        doc = result.document
-        if doc.derived_struct_data:
-            for s in doc.derived_struct_data.get("snippets", []):
-                text = s.get("snippet", "").strip()
-                if text:
-                    snippets.append(text)
-        if len(snippets) >= 3:
-            break
-
-    if snippets:
-        return "\n\n".join(snippets)
-
-    return ""
+    # Collect all text response messages
+    parts_text = []
+    for msg in response.query_result.response_messages:
+        if msg.text and msg.text.text:
+            parts_text.extend(msg.text.text)
+    return " ".join(parts_text).strip()
 
 
-def query_help_center(question: str) -> str:
-    """Search the Stayforlong help center for FAQs, platform policies, payment methods,
-    minimum stay rules, stay extensions, cancellation policies and general platform questions.
+def query_help_center(question: str, session_id: str = "default") -> str:
+    """Ask the Stayforlong help center agent (powered by Vertex AI Agent Designer) about
+    platform FAQs, policies, payment methods, minimum stay rules, stay extensions,
+    cancellation policies and general platform questions.
     Accepts any question in Spanish or English."""
     try:
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _search_vertex(question))
-            result = future.result(timeout=15)
+            future = pool.submit(asyncio.run, _call_agent(session_id, question))
+            result = future.result(timeout=20)
         if result:
             return result
         return (
@@ -91,7 +78,7 @@ knowledge_agent = LlmAgent(
     model=config.GEMINI_MODEL,
     instruction=(
         "You are the Stayforlong help center specialist. "
-        "You have access to our complete knowledge base via Vertex AI Search.\n\n"
+        "You have access to our conversational agent powered by Vertex AI Agent Designer.\n\n"
 
         "SCOPE — what you handle:\n"
         "✅ General platform questions: how Stayforlong works, what it is, who it's for\n"

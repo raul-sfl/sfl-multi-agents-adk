@@ -24,7 +24,8 @@ USE_VERTEX_AI = _use_vertex
 GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
 
-# Vertex AI Search — HelpCenter knowledge base
-# Engine ID from: Agent Builder → Vertex AI Search → your app → Settings
-# Example: stayforlong-help-center_1234567890123
-HELP_CENTER_SEARCH_ENGINE_ID = os.environ.get("HELP_CENTER_SEARCH_ENGINE_ID", "")
+# Vertex AI Agent Designer — HelpCenter conversational agent (Dialogflow CX Playbooks)
+# Format: projects/PROJECT/locations/LOCATION/agents/AGENT_ID
+# Get AGENT_ID from the URL in Agent Designer:
+#   https://console.cloud.google.com/gen-app-builder/locations/LOCATION/agents/AGENT_ID
+HELP_CENTER_AGENT_ID = os.environ.get("HELP_CENTER_AGENT_ID", "")
