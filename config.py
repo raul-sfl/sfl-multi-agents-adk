@@ -18,3 +18,12 @@ _use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "t
 if _use_vertex:
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
     os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+# Exposed for health endpoint and diagnostics
+USE_VERTEX_AI = _use_vertex
+GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+# Vertex AI Agent Builder — HelpCenter agent
+# Format: projects/PROJECT_ID/locations/LOCATION/agents/AGENT_ID
+HELP_CENTER_AGENT_ID = os.environ.get("HELP_CENTER_AGENT_ID", "")
