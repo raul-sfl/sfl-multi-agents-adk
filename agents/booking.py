@@ -14,8 +14,7 @@ def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
     if not res:
         return json.dumps({
             "found": False,
-            "message": f"No se encontró ninguna reserva con el ID '{booking_id}'. "
-                       "Por favor verifica el número de reserva.",
+            "message": f"No reservation found with ID '{booking_id}'. Please verify the booking number.",
         })
 
     public_info = {
@@ -47,8 +46,8 @@ def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
             "found": True,
             "identity_verified": False,
             "message": (
-                "El nombre proporcionado no coincide con el titular de la reserva. "
-                "Por favor verifica tu nombre completo e inténtalo de nuevo."
+                "The name provided does not match the name on this reservation. "
+                "Please verify your full name and try again."
             ),
         })
 
@@ -69,7 +68,7 @@ def get_reservations_by_email(email: str) -> str:
     if not res:
         return json.dumps({
             "found": False,
-            "message": f"No se encontraron reservas para el email '{email}'.",
+            "message": f"No reservations found for email '{email}'.",
         })
     return json.dumps({
         "found": True,
@@ -86,12 +85,12 @@ def check_cancellation_policy(booking_id: str) -> str:
     """Get the cancellation policy description for a reservation. No identity verification required."""
     res = RESERVATIONS.get(booking_id.upper())
     if not res:
-        return json.dumps({"found": False, "message": f"Reserva '{booking_id}' no encontrada."})
+        return json.dumps({"found": False, "message": f"Reservation '{booking_id}' not found."})
     policy_name = res["cancellation_policy"]
     return json.dumps({
         "booking_id": booking_id,
         "policy_type": policy_name,
-        "policy_description": CANCELLATION_POLICIES.get(policy_name, "Política no disponible."),
+        "policy_description": CANCELLATION_POLICIES.get(policy_name, "Policy not available."),
         "current_status": res["status"],
         "note": "Cancellation deadline is only shown after identity verification.",
     })
@@ -103,8 +102,7 @@ booking_agent = LlmAgent(
     name="Booking",
     model=config.GEMINI_MODEL,
     instruction=(
-        "You are the reservations specialist for Stayforlong. Always respond in the same language "
-        "the user writes in (Spanish or English).\n\n"
+        "You are the reservations specialist for Stayforlong. Always respond in {lang_name}.\n\n"
 
         "SCOPE — what you handle:\n"
         "✅ Booking status, confirmation, check-in/out dates, number of nights\n"

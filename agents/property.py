@@ -34,8 +34,8 @@ def lookup_property(name_or_id: str) -> str:
         return json.dumps({
             "found": False,
             "message": (
-                f"No se encontró la propiedad '{name_or_id}'. "
-                "Las propiedades disponibles son: Barcelona (Gran Via), Madrid (Salamanca), Lisboa (LX Factory)."
+                f"Property '{name_or_id}' not found. "
+                "Available properties are: Barcelona (Gran Via), Madrid (Salamanca), Lisbon (LX Factory)."
             ),
         })
     pid = prop["property_id"]
@@ -64,60 +64,60 @@ def get_property_amenities(property_id: str) -> str:
     """Get the full list of amenities for a Stayforlong property. Accepts property ID or city name."""
     prop = _find_property(property_id)
     if not prop:
-        return json.dumps({"found": False, "message": f"Propiedad '{property_id}' no encontrada."})
+        return json.dumps({"found": False, "message": f"Property '{property_id}' not found."})
 
     amenities = prop["amenities"]
     summary = []
 
     wifi = amenities.get("wifi", {})
     if wifi.get("available"):
-        summary.append(f"WiFi: disponible, {wifi.get('speed_mbps')} Mbps, {wifi.get('cost', 'incluido')}")
+        summary.append(f"WiFi: available, {wifi.get('speed_mbps')} Mbps, {wifi.get('cost', 'included')}")
 
     parking = amenities.get("parking", {})
     if parking.get("available"):
-        summary.append(f"Parking: {parking.get('cost', 'incluido')}" +
-                       (" (reserva previa)" if parking.get("reservation_required") else ""))
+        summary.append(f"Parking: {parking.get('cost', 'included')}" +
+                       (" (advance reservation required)" if parking.get("reservation_required") else ""))
     elif parking.get("nearby_garage"):
-        summary.append(f"Parking: no en el edificio, {parking.get('nearby_garage')}")
+        summary.append(f"Parking: not on-site, {parking.get('nearby_garage')}")
 
     gym = amenities.get("gym", {})
     if gym.get("available"):
-        summary.append(f"Gimnasio: disponible ({gym.get('hours', '')})")
+        summary.append(f"Gym: available ({gym.get('hours', '')})")
 
     pool = amenities.get("pool", {})
     if pool.get("available"):
-        summary.append("Piscina: disponible")
+        summary.append("Pool: available")
 
     laundry = amenities.get("laundry", {})
     if laundry.get("available"):
-        summary.append(f"Lavandería: {laundry.get('type')}")
+        summary.append(f"Laundry: {laundry.get('type')}")
 
     kitchen = amenities.get("kitchen", {})
     if kitchen.get("available"):
         equip = kitchen.get("equipment", [])
-        summary.append(f"Cocina: {kitchen.get('type')}" +
-                       (f" con {', '.join(equip)}" if equip else ""))
+        summary.append(f"Kitchen: {kitchen.get('type')}" +
+                       (f" with {', '.join(equip)}" if equip else ""))
 
     cleaning = amenities.get("cleaning", {})
     if cleaning:
-        summary.append(f"Limpieza: {cleaning.get('frequency')}, {'incluida' if cleaning.get('included') else 'no incluida'}")
+        summary.append(f"Cleaning: {cleaning.get('frequency')}, {'included' if cleaning.get('included') else 'not included'}")
 
     extras = []
     if amenities.get("air_conditioning"):
-        extras.append("aire acondicionado")
+        extras.append("air conditioning")
     if amenities.get("elevator"):
-        extras.append("ascensor")
+        extras.append("elevator")
     if amenities.get("pets_allowed"):
-        extras.append("admite mascotas" + (f" ({amenities.get('pets_policy')})" if amenities.get("pets_policy") else ""))
+        extras.append("pets allowed" + (f" ({amenities.get('pets_policy')})" if amenities.get("pets_policy") else ""))
     else:
-        extras.append("no admite mascotas")
+        extras.append("no pets")
     if amenities.get("smoking_allowed"):
-        extras.append("se permite fumar")
+        extras.append("smoking allowed")
     else:
-        extras.append("no se permite fumar")
+        extras.append("no smoking")
 
     if extras:
-        summary.append("Otros: " + ", ".join(extras))
+        summary.append("Other: " + ", ".join(extras))
 
     pid = prop["property_id"]
     return json.dumps({
@@ -132,7 +132,7 @@ def get_checkin_info(property_id: str) -> str:
     """Get check-in and check-out times and procedures for a property."""
     prop = _find_property(property_id)
     if not prop:
-        return json.dumps({"found": False, "message": f"Propiedad '{property_id}' no encontrada."})
+        return json.dumps({"found": False, "message": f"Property '{property_id}' not found."})
 
     pid = prop["property_id"]
     info = {
@@ -159,7 +159,7 @@ property_agent = LlmAgent(
     model=config.GEMINI_MODEL,
     instruction=(
         "You are the accommodation specialist for Stayforlong, a long-stay apartment platform. "
-        "Always respond in the same language the user writes in (Spanish or English).\n\n"
+        "Always respond in {lang_name}.\n\n"
 
         "SCOPE — what you handle:\n"
         "✅ Property/accommodation general info: address, stars, type, ratings\n"

@@ -13,7 +13,7 @@ def lookup_incident(ticket_id: str) -> str:
     if not ticket:
         return json.dumps({
             "found": False,
-            "message": f"No se encontró el ticket '{ticket_id}'.",
+            "message": f"Ticket '{ticket_id}' not found.",
         })
     return json.dumps({
         "found": True,
@@ -55,9 +55,9 @@ def create_incident(category: str, description: str, booking_id: str) -> str:
         "category": category,
         "status": "open",
         "message": (
-            f"Ticket {ticket_id} creado correctamente. "
-            "Nuestro equipo de soporte te contactará en un máximo de 2 horas. "
-            "Recibirás una confirmación por email."
+            f"Ticket {ticket_id} created successfully. "
+            "Our support team will contact you within 2 hours. "
+            "You will receive an email confirmation."
         ),
     })
 
@@ -68,12 +68,12 @@ def escalate_to_human(reason: str) -> str:
         "escalated": True,
         "reason": reason,
         "message": (
-            "He escalado tu caso a un agente humano de Stayforlong. "
-            "Recibirás un mensaje de WhatsApp en los próximos 5-10 minutos. "
-            "Lamentamos los inconvenientes causados."
+            "Your case has been escalated to a Stayforlong human agent. "
+            "You will receive a WhatsApp message within the next 5-10 minutes. "
+            "We apologize for the inconvenience."
         ),
         "whatsapp_notification_sent": True,
-        "estimated_response_time": "5-10 minutos",
+        "estimated_response_time": "5-10 minutes",
     })
 
 
@@ -83,8 +83,7 @@ support_agent = LlmAgent(
     name="Support",
     model=config.GEMINI_MODEL,
     instruction=(
-        "You are the support agent for Stayforlong. Always respond in the same language "
-        "the user writes in (Spanish or English).\n\n"
+        "You are the support agent for Stayforlong. Always respond in {lang_name}.\n\n"
 
         "SCOPE — what you handle:\n"
         "✅ Incidents, problems during stay: maintenance, noise, cleanliness, appliances, WiFi issues\n"

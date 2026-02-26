@@ -141,7 +141,7 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
                 logger.error(f"Error in ADK run_async: {e}", exc_info=True)
                 await websocket.send_json({
                     "type": "error",
-                    "content": "Ha ocurrido un error interno. Por favor, inténtalo de nuevo.",
+                    "content": "An internal error occurred. Please try again.",
                 })
                 continue
 

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 _contact = STAYFORLONG_CONTACT
 
 
-async def _call_agent(session_id: str, text: str, language_code: str = "es") -> str:
+async def _call_agent(session_id: str, text: str, language_code: str = "en") -> str:
     """Call the Vertex AI Agent Designer agent via Dialogflow CX detect_intent."""
     if not config.HELP_CENTER_AGENT_ID:
         return ""  # Caller will use fallback contact message
@@ -61,15 +61,15 @@ def query_help_center(question: str, session_id: str = "default") -> str:
         if result:
             return result
         return (
-            "No he encontrado información específica sobre eso en el help center. "
-            f"Contacta con nuestro equipo: 📞 {_contact['phone']} | "
+            "No specific information was found for that in the help center. "
+            f"Please contact our team: 📞 {_contact['phone']} | "
             f"✉️ {_contact['email']} | {_contact['hours']}"
         )
     except Exception as exc:
         logger.error("query_help_center failed: %s", exc)
         return (
-            "No he podido consultar el centro de ayuda en este momento. "
-            f"Por favor contacta con Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
+            "Could not reach the help center at this moment. "
+            f"Please contact Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
         )
 
 
@@ -77,7 +77,7 @@ knowledge_agent = LlmAgent(
     name="HelpCenter",
     model=config.GEMINI_MODEL,
     instruction=(
-        "You are the Stayforlong help center specialist. "
+        "You are the Stayforlong help center specialist. Always respond in {lang_name}. "
         "You have access to our conversational agent powered by Vertex AI Agent Designer.\n\n"
 
         "SCOPE — what you handle:\n"
@@ -95,7 +95,7 @@ knowledge_agent = LlmAgent(
 
         "INSTRUCTIONS:\n"
         "• For EVERY question within your scope, ALWAYS call query_help_center first.\n"
-        "• Present the answer clearly in the same language the user writes in.\n"
+        "• Present the answer clearly in {lang_name}.\n"
         "• If query_help_center returns no relevant answer, provide the support contact:\n"
         f"  📞 {_contact['phone']}  |  ✉️ {_contact['email']}  |  {_contact['hours']}\n"
         "• IMPORTANT: For anything outside your scope, call transfer_to_triage IMMEDIATELY."
