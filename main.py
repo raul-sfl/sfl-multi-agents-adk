@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from ws.handler import websocket_endpoint
+from admin.router import router as admin_router
 import config  # Must be imported first to set env vars before ADK initializes
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Stayforlong Chat PoC",
     description="Multi-agent AI chat for Stayforlong customer support",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
@@ -31,11 +32,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin_router)
+
 
 @app.websocket("/ws")
 async def ws_route(websocket: WebSocket):
-    lang = websocket.query_params.get("lang", "en")[:2].lower()
-    await websocket_endpoint(websocket, lang)
+    lang    = websocket.query_params.get("lang", "en")[:2].lower()
+    user_id = websocket.query_params.get("user_id", "").strip()
+    await websocket_endpoint(websocket, lang, user_id)
 
 
 @app.get("/health")
@@ -46,6 +50,7 @@ async def health():
         "backend": "vertex_ai" if config.USE_VERTEX_AI else "ai_studio",
         "project": config.GOOGLE_CLOUD_PROJECT if config.USE_VERTEX_AI else None,
         "api_key_configured": bool(config.GEMINI_API_KEY),
+        "firestore_enabled": config.FIRESTORE_ENABLED,
     }
 
 

@@ -1,7 +1,9 @@
+import uuid
 import logging
 from google.genai import types as genai_types
 from fastapi import WebSocket, WebSocketDisconnect
 from orchestrator.adk_runner import runner, session_service
+from services.conversation_logger import conversation_logger
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +72,32 @@ LANG_NAMES = {
 }
 
 
-async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
+async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: str = ""):
     await websocket.accept()
 
     supported_lang = lang if lang in WELCOME_MESSAGES else "en"
     lang_name = LANG_NAMES.get(supported_lang, "English")
 
-    # Create ADK session with language context in state
+    # Assign an anonymous ID when the client doesn't provide one
+    if not user_id:
+        user_id = f"anon_{uuid.uuid4().hex[:12]}"
+
+    # ── Firestore: register user, check for previous conversation ────────────
+    await conversation_logger.ensure_user(user_id, supported_lang)
+
+    prev_conv = await conversation_logger.get_recent_conversation(user_id)
+    history_messages: list[dict] = []
+    if prev_conv:
+        raw = await conversation_logger.get_conversation_messages(
+            prev_conv["id"], limit=20
+        )
+        # Strip internal fields; keep only what the client needs
+        history_messages = [
+            {"role": m["role"], "content": m["content"], "agent": m.get("agent")}
+            for m in raw
+        ]
+
+    # ── ADK session ───────────────────────────────────────────────────────────
     adk_session = await session_service.create_session(
         app_name="stayforlong",
         user_id=f"ws-{id(websocket)}",
@@ -84,17 +105,30 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
     )
     session_id = adk_session.id
 
+    # ── Open Firestore conversation ───────────────────────────────────────────
+    conv_id = await conversation_logger.create_conversation(
+        user_id, session_id, supported_lang
+    )
+
+    # ── Send session_init (with optional history) ─────────────────────────────
     await websocket.send_json({
         "type": "session_init",
         "session_id": session_id,
+        "user_id": user_id,
         "lang": supported_lang,
-    })
-    await websocket.send_json({
-        "type": "message",
-        "content": WELCOME_MESSAGES[supported_lang],
-        "agent": "Stayforlong Assistant",
+        "history": history_messages,        # empty list → no previous session
     })
 
+    # ── Welcome message ───────────────────────────────────────────────────────
+    welcome_text = WELCOME_MESSAGES[supported_lang]
+    await websocket.send_json({
+        "type": "message",
+        "content": welcome_text,
+        "agent": "Stayforlong Assistant",
+    })
+    await conversation_logger.log_message(conv_id, "assistant", welcome_text, "Stayforlong Assistant")
+
+    # ── Main message loop ─────────────────────────────────────────────────────
     try:
         while True:
             data = await websocket.receive_json()
@@ -102,10 +136,10 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
             if not user_message:
                 continue
 
-            await websocket.send_json({
-                "type": "typing",
-                "agent": "Stayforlong",
-            })
+            # Log user message
+            await conversation_logger.log_message(conv_id, "user", user_message)
+
+            await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
 
             try:
                 content = genai_types.Content(
@@ -121,14 +155,9 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
                     session_id=session_id,
                     new_message=content,
                 ):
-                    # Update typing indicator with active agent on intermediate events
                     if event.author and not event.is_final_response():
-                        await websocket.send_json({
-                            "type": "typing",
-                            "agent": event.author,
-                        })
+                        await websocket.send_json({"type": "typing", "agent": event.author})
 
-                    # Capture final response
                     if event.is_final_response():
                         if event.content and event.content.parts:
                             for part in event.content.parts:
@@ -138,7 +167,7 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
                             reply_agent = event.author
 
             except Exception as e:
-                logger.error(f"Error in ADK run_async: {e}", exc_info=True)
+                logger.error("Error in ADK run_async: %s", e, exc_info=True)
                 await websocket.send_json({
                     "type": "error",
                     "content": "An internal error occurred. Please try again.",
@@ -151,13 +180,17 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en"):
                     "content": reply_text,
                     "agent": reply_agent,
                 })
+                # Log assistant reply
+                await conversation_logger.log_message(conv_id, "assistant", reply_text, reply_agent)
 
     except WebSocketDisconnect:
-        logger.info(f"Session {session_id} disconnected.")
+        logger.info("Session %s (user %s) disconnected.", session_id, user_id)
         await session_service.delete_session(
             app_name="stayforlong",
             user_id=f"ws-{id(websocket)}",
             session_id=session_id,
         )
+        await conversation_logger.end_conversation(conv_id)
     except Exception as e:
-        logger.error(f"WebSocket error: {e}", exc_info=True)
+        logger.error("WebSocket error: %s", e, exc_info=True)
+        await conversation_logger.end_conversation(conv_id)
