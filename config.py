@@ -29,3 +29,20 @@ GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
 # Get AGENT_ID from the URL in Agent Designer:
 #   https://console.cloud.google.com/gen-app-builder/locations/LOCATION/agents/AGENT_ID
 HELP_CENTER_AGENT_ID = os.environ.get("HELP_CENTER_AGENT_ID", "")
+
+# ── Conversation logging (Firestore) ─────────────────────────────────────────
+# Set FIRESTORE_ENABLED=false to disable persistence (logs go nowhere).
+# Uses GOOGLE_CLOUD_PROJECT for the Firestore project.
+# Local dev: gcloud auth application-default login (same as Vertex AI)
+FIRESTORE_ENABLED = os.environ.get("FIRESTORE_ENABLED", "true").lower() == "true"
+
+# Optional prefix for Firestore collection names (e.g. "staging_" → staging_conversations)
+FIRESTORE_COLLECTION_PREFIX = os.environ.get("FIRESTORE_COLLECTION_PREFIX", "")
+
+# How many hours back to look for a previous conversation to offer history recovery
+HISTORY_RECOVERY_HOURS = int(os.environ.get("HISTORY_RECOVERY_HOURS", "48"))
+
+# ── Admin dashboard ───────────────────────────────────────────────────────────
+# Protect the /admin dashboard with a secret key.
+# If empty, the dashboard is open (dev mode only — set a key in production!).
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
