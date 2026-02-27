@@ -10,7 +10,7 @@ if GEMINI_API_KEY and not os.environ.get("GOOGLE_API_KEY"):
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Vertex AI (optional) — set GOOGLE_GENAI_USE_VERTEXAI=true to use Vertex instead of AI Studio
+# Vertex AI — set GOOGLE_GENAI_USE_VERTEXAI=true to use Vertex instead of AI Studio
 # Also requires: GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION
 # Local auth: gcloud auth application-default login
 # Railway: set GOOGLE_APPLICATION_CREDENTIALS to service account JSON path
@@ -30,16 +30,22 @@ GOOGLE_CLOUD_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
 #   https://console.cloud.google.com/gen-app-builder/locations/LOCATION/agents/AGENT_ID
 HELP_CENTER_AGENT_ID = os.environ.get("HELP_CENTER_AGENT_ID", "")
 
-# ── Conversation logging (Firestore) ─────────────────────────────────────────
-# Set FIRESTORE_ENABLED=false to disable persistence (logs go nowhere).
-# Uses GOOGLE_CLOUD_PROJECT for the Firestore project.
-# Local dev: gcloud auth application-default login (same as Vertex AI)
-FIRESTORE_ENABLED = os.environ.get("FIRESTORE_ENABLED", "true").lower() == "true"
+# ── Vertex AI Agent Engine (VertexAiSessionService) ──────────────────────────
+# Numeric resource ID of the reasoning engine, e.g. "1234567890123456"
+# Get it from: gcloud ai reasoning-engines list --location=LOCATION
+# If empty, falls back to InMemorySessionService (local dev without GCP)
+AGENT_ENGINE_ID = os.environ.get("AGENT_ENGINE_ID", "")
 
-# Optional prefix for Firestore collection names (e.g. "staging_" → staging_conversations)
-FIRESTORE_COLLECTION_PREFIX = os.environ.get("FIRESTORE_COLLECTION_PREFIX", "")
+# ── Conversation logging (Cloud Logging) ─────────────────────────────────────
+# Set CLOUD_LOGGING_ENABLED=false to disable (logs go nowhere).
+# Uses GOOGLE_CLOUD_PROJECT for the log destination.
+# Local dev: gcloud auth application-default login
+CLOUD_LOGGING_ENABLED = os.environ.get("CLOUD_LOGGING_ENABLED", "true").lower() == "true"
 
-# How many hours back to look for a previous conversation to offer history recovery
+# Log name written to Cloud Logging (under the GCP project)
+CLOUD_LOGGING_LOG_NAME = os.environ.get("CLOUD_LOGGING_LOG_NAME", "stayforlong-conversations")
+
+# How many hours back to look for a previous session to offer history recovery
 HISTORY_RECOVERY_HOURS = int(os.environ.get("HISTORY_RECOVERY_HOURS", "48"))
 
 # ── Admin dashboard ───────────────────────────────────────────────────────────

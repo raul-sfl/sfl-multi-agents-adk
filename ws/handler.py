@@ -1,9 +1,12 @@
 import uuid
 import logging
+from datetime import datetime, timezone, timedelta
 from google.genai import types as genai_types
 from fastapi import WebSocket, WebSocketDisconnect
 from orchestrator.adk_runner import runner, session_service
 from services.conversation_logger import conversation_logger
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,71 @@ LANG_NAMES = {
 }
 
 
+async def _get_history(user_id: str) -> list[dict]:
+    """
+    Recover messages from the most recent Vertex AI session of this user.
+    Returns an empty list on any error or when outside HISTORY_RECOVERY_HOURS.
+    """
+    try:
+        response = await session_service.list_sessions(
+            app_name="stayforlong",
+            user_id=user_id,
+        )
+        sessions = getattr(response, "sessions", []) or []
+        if not sessions:
+            return []
+
+        # Most recent session by last_update_time
+        sessions_sorted = sorted(
+            sessions,
+            key=lambda s: getattr(s, "last_update_time", 0),
+            reverse=True,
+        )
+        recent = sessions_sorted[0]
+
+        # Enforce recovery window
+        last_update = getattr(recent, "last_update_time", 0)
+        if last_update:
+            cutoff = (
+                datetime.now(timezone.utc).timestamp()
+                - config.HISTORY_RECOVERY_HOURS * 3600
+            )
+            if last_update < cutoff:
+                return []
+
+        # Fetch full session to read events
+        full_session = await session_service.get_session(
+            app_name="stayforlong",
+            user_id=user_id,
+            session_id=recent.id,
+        )
+        if not full_session:
+            return []
+
+        messages: list[dict] = []
+        for event in getattr(full_session, "events", []):
+            content = getattr(event, "content", None)
+            if not content:
+                continue
+            role = getattr(content, "role", None)
+            parts = getattr(content, "parts", []) or []
+            text = "".join(
+                getattr(p, "text", "") for p in parts if hasattr(p, "text")
+            )
+            if not text:
+                continue
+            author = getattr(event, "author", None)
+            messages.append({
+                "role":    "user" if role == "user" else "assistant",
+                "content": text,
+                "agent":   author if role != "user" else None,
+            })
+        return messages
+    except Exception as exc:
+        logger.warning("History recovery failed for user %s: %s", user_id, exc)
+        return []
+
+
 async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: str = ""):
     await websocket.accept()
 
@@ -82,51 +150,42 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     if not user_id:
         user_id = f"anon_{uuid.uuid4().hex[:12]}"
 
-    # ── Firestore: register user, check for previous conversation ────────────
-    await conversation_logger.ensure_user(user_id, supported_lang)
+    # ── History recovery from VertexAiSessionService ──────────────────────────
+    history_messages = await _get_history(user_id)
 
-    prev_conv = await conversation_logger.get_recent_conversation(user_id)
-    history_messages: list[dict] = []
-    if prev_conv:
-        raw = await conversation_logger.get_conversation_messages(
-            prev_conv["id"], limit=20
-        )
-        # Strip internal fields; keep only what the client needs
-        history_messages = [
-            {"role": m["role"], "content": m["content"], "agent": m.get("agent")}
-            for m in raw
-        ]
-
-    # ── ADK session ───────────────────────────────────────────────────────────
+    # ── ADK session — keyed by real user_id for cross-session continuity ──────
     adk_session = await session_service.create_session(
         app_name="stayforlong",
-        user_id=f"ws-{id(websocket)}",
+        user_id=user_id,
         state={"lang": supported_lang, "lang_name": lang_name},
     )
     session_id = adk_session.id
 
-    # ── Open Firestore conversation ───────────────────────────────────────────
-    conv_id = await conversation_logger.create_conversation(
-        user_id, session_id, supported_lang
+    # ── Conversation audit log ────────────────────────────────────────────────
+    conv_id = str(uuid.uuid4())
+    await conversation_logger.log_conversation_start(
+        conv_id, user_id, session_id, supported_lang
     )
 
     # ── Send session_init (with optional history) ─────────────────────────────
     await websocket.send_json({
-        "type": "session_init",
+        "type":       "session_init",
         "session_id": session_id,
-        "user_id": user_id,
-        "lang": supported_lang,
-        "history": history_messages,        # empty list → no previous session
+        "user_id":    user_id,
+        "lang":       supported_lang,
+        "history":    history_messages,
     })
 
     # ── Welcome message ───────────────────────────────────────────────────────
     welcome_text = WELCOME_MESSAGES[supported_lang]
     await websocket.send_json({
-        "type": "message",
+        "type":    "message",
         "content": welcome_text,
-        "agent": "Stayforlong Assistant",
+        "agent":   "Stayforlong Assistant",
     })
-    await conversation_logger.log_message(conv_id, "assistant", welcome_text, "Stayforlong Assistant")
+    await conversation_logger.log_message(
+        conv_id, "assistant", welcome_text, "Stayforlong Assistant"
+    )
 
     # ── Main message loop ─────────────────────────────────────────────────────
     try:
@@ -136,9 +195,7 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
             if not user_message:
                 continue
 
-            # Log user message
             await conversation_logger.log_message(conv_id, "user", user_message)
-
             await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
 
             try:
@@ -151,13 +208,14 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
                 reply_agent = "Stayforlong"
 
                 async for event in runner.run_async(
-                    user_id=f"ws-{id(websocket)}",
+                    user_id=user_id,
                     session_id=session_id,
                     new_message=content,
                 ):
                     if event.author and not event.is_final_response():
-                        await websocket.send_json({"type": "typing", "agent": event.author})
-
+                        await websocket.send_json(
+                            {"type": "typing", "agent": event.author}
+                        )
                     if event.is_final_response():
                         if event.content and event.content.parts:
                             for part in event.content.parts:
@@ -169,28 +227,25 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
             except Exception as e:
                 logger.error("Error in ADK run_async: %s", e, exc_info=True)
                 await websocket.send_json({
-                    "type": "error",
+                    "type":    "error",
                     "content": "An internal error occurred. Please try again.",
                 })
                 continue
 
             if reply_text:
                 await websocket.send_json({
-                    "type": "message",
+                    "type":    "message",
                     "content": reply_text,
-                    "agent": reply_agent,
+                    "agent":   reply_agent,
                 })
-                # Log assistant reply
-                await conversation_logger.log_message(conv_id, "assistant", reply_text, reply_agent)
+                await conversation_logger.log_message(
+                    conv_id, "assistant", reply_text, reply_agent
+                )
 
     except WebSocketDisconnect:
         logger.info("Session %s (user %s) disconnected.", session_id, user_id)
-        await session_service.delete_session(
-            app_name="stayforlong",
-            user_id=f"ws-{id(websocket)}",
-            session_id=session_id,
-        )
-        await conversation_logger.end_conversation(conv_id)
+        # Session kept in Vertex AI for history recovery on next connect
+        await conversation_logger.log_conversation_end(conv_id)
     except Exception as e:
         logger.error("WebSocket error: %s", e, exc_info=True)
-        await conversation_logger.end_conversation(conv_id)
+        await conversation_logger.log_conversation_end(conv_id)

@@ -50,7 +50,8 @@ async def health():
         "backend": "vertex_ai" if config.USE_VERTEX_AI else "ai_studio",
         "project": config.GOOGLE_CLOUD_PROJECT if config.USE_VERTEX_AI else None,
         "api_key_configured": bool(config.GEMINI_API_KEY),
-        "firestore_enabled": config.FIRESTORE_ENABLED,
+        "cloud_logging_enabled": config.CLOUD_LOGGING_ENABLED,
+        "agent_engine_id": config.AGENT_ENGINE_ID or None,
     }
 
 
