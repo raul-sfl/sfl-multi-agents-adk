@@ -1,7 +1,7 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 google-adk
-google-cloud-dialogflow-cx
+google-cloud-discoveryengine
 google-cloud-logging>=3.0.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0

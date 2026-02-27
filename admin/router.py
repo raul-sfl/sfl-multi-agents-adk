@@ -282,7 +282,7 @@ function renderList(convs) {
       return '<span class="badge b-agent">' + esc(a) + '</span>';
     }).join('');
     return (
-      '<div class="conv-item' + (c.id===activeConvId?' active':'') + '" onclick="selectConv(' + JSON.stringify(c.id) + ')">' +
+      '<div class="conv-item' + (c.id===activeConvId?' active':'') + '" data-id="' + esc(c.id) + '">' +
       '<div class="conv-header">' +
         '<span class="conv-uid" title="' + esc(c.user_id) + '">' + esc(shortId(c.user_id)) + '</span>' +
         '<span class="conv-time">' + rel(c.last_activity_at) + '</span>' +
@@ -296,6 +296,10 @@ function renderList(convs) {
       '</div>'
     );
   }).join('');
+
+  list.querySelectorAll('.conv-item').forEach(function(el) {
+    el.addEventListener('click', function() { selectConv(el.dataset.id); });
+  });
 }
 
 /* ── Conversation detail ── */
@@ -304,9 +308,7 @@ async function selectConv(id) {
 
   // highlight selected item
   document.querySelectorAll('#conv-list .conv-item').forEach(function(el){
-    el.classList.remove('active');
-    if (el.getAttribute('onclick') && el.getAttribute('onclick').includes(JSON.stringify(id)))
-      el.classList.add('active');
+    el.classList.toggle('active', el.dataset.id === id);
   });
 
   var panel = document.getElementById('detail');
@@ -442,7 +444,8 @@ async def api_list_conversations(
     _auth=Depends(require_admin),
 ):
     from services.conversation_logger import conversation_logger
-    convs = await conversation_logger.list_conversations(limit=limit)
+    result = await conversation_logger.list_conversations(limit=limit)
+    convs = result.get("items", []) if isinstance(result, dict) else result
     if status:
         convs = [c for c in convs if c.get("status") == status]
     if lang:
@@ -477,7 +480,8 @@ async def api_user_conversations(
     _auth=Depends(require_admin),
 ):
     from services.conversation_logger import conversation_logger
-    convs = await conversation_logger.list_user_conversations(user_id)
+    result = await conversation_logger.list_conversations(user_id=user_id)
+    convs = result.get("items", []) if isinstance(result, dict) else result
     if status:
         convs = [c for c in convs if c.get("status") == status]
     if lang:

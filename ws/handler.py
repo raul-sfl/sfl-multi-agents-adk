@@ -124,7 +124,8 @@ async def _get_history(user_id: str) -> list[dict]:
             role = getattr(content, "role", None)
             parts = getattr(content, "parts", []) or []
             text = "".join(
-                getattr(p, "text", "") for p in parts if hasattr(p, "text")
+                t for p in parts
+                if (t := getattr(p, "text", None)) is not None
             )
             if not text:
                 continue

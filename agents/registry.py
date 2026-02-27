@@ -29,7 +29,7 @@ class AgentEntry:
 SPECIALISTS: list[AgentEntry] = [
     AgentEntry(
         booking_agent,
-        "Reservations, booking ID, dates, prices, cancellations, refunds",
+        "User provides a booking ID (SFL-XXXX-NNN) or email to look up their specific reservation details, status, price, or cancellation deadline. NOT for generic questions like 'how do I modify/cancel a booking' without a booking ID.",
     ),
     AgentEntry(
         support_agent,

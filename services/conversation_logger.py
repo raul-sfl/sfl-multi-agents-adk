@@ -25,6 +25,7 @@ All methods silently no-op when Cloud Logging is unavailable or
 CLOUD_LOGGING_ENABLED=false. The rest of the app continues unaffected.
 """
 
+import asyncio
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
@@ -283,19 +284,28 @@ class ConversationLogger:
             )
             entries = list(page_iter)
 
-            # Enrich with latest tags for each conversation
+            # Enrich with latest tags, message counts and agents
             conv_ids = [
                 e.payload.get("conversation_id")
                 for e in entries
                 if isinstance(e.payload, dict)
             ]
-            tag_map = await self._latest_tags_for(conv_ids)
+            tag_map, msg_stats = await asyncio.gather(
+                self._latest_tags_for(conv_ids),
+                self._message_stats_for(conv_ids),
+            )
 
             items = []
             for entry in entries:
                 c = _entry_to_conv(entry)
                 if tag_map.get(c["id"]):
                     c["tags"] = tag_map[c["id"]]
+                stats = msg_stats.get(c["id"])
+                if stats:
+                    c["message_count"] = stats["count"]
+                    c["agents_used"]   = stats["agents"]
+                    if stats["last_at"]:
+                        c["last_activity_at"] = stats["last_at"]
                 if agent and agent not in (c.get("agents_used") or []):
                     continue
                 if tag and tag not in (c.get("tags") or []):
@@ -332,19 +342,27 @@ class ConversationLogger:
             if not entries:
                 return None
             c = _entry_to_conv(entries[0])
-            # Latest tags
-            latest = await self._latest_tags_for([conv_id])
+            # Enrich with tags, message stats and closed status
+            latest, msg_stats, closed = await asyncio.gather(
+                self._latest_tags_for([conv_id]),
+                self._message_stats_for([conv_id]),
+                asyncio.to_thread(lambda: list(cl_client.list_entries(
+                    filter_=(
+                        f'logName="{_log_name()}"'
+                        f' AND jsonPayload.event_type="conversation_end"'
+                        f' AND labels.conversation_id="{conv_id}"'
+                    ),
+                    page_size=1,
+                ))),
+            )
             if latest.get(conv_id):
                 c["tags"] = latest[conv_id]
-            # Is it closed?
-            closed = list(cl_client.list_entries(
-                filter_=(
-                    f'logName="{_log_name()}"'
-                    f' AND jsonPayload.event_type="conversation_end"'
-                    f' AND labels.conversation_id="{conv_id}"'
-                ),
-                page_size=1,
-            ))
+            stats = msg_stats.get(conv_id)
+            if stats:
+                c["message_count"] = stats["count"]
+                c["agents_used"]   = stats["agents"]
+                if stats["last_at"]:
+                    c["last_activity_at"] = stats["last_at"]
             if closed:
                 c["status"] = "closed"
             return c
@@ -450,6 +468,46 @@ class ConversationLogger:
         return items
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    async def _message_stats_for(self, conv_ids: list[str]) -> dict[str, dict]:
+        """Return {conv_id: {count, agents, last_at}} from message events."""
+        if not conv_ids:
+            return {}
+        cl_client, _cl = _get_cl()
+        if not cl_client:
+            return {}
+        try:
+            from google.cloud import logging as cloud_logging  # noqa: PLC0415
+
+            id_clause = " OR ".join(
+                f'labels.conversation_id="{cid}"' for cid in conv_ids
+            )
+            entries = list(cl_client.list_entries(
+                filter_=(
+                    f'logName="{_log_name()}"'
+                    f' AND jsonPayload.event_type="message"'
+                    f' AND ({id_clause})'
+                ),
+                order_by=cloud_logging.ASCENDING,
+                page_size=min(len(conv_ids) * 100, 1000),
+            ))
+            result: dict[str, dict] = {}
+            for e in entries:
+                payload = e.payload if isinstance(e.payload, dict) else {}
+                cid = payload.get("conversation_id", "")
+                if not cid:
+                    continue
+                if cid not in result:
+                    result[cid] = {"count": 0, "agents": [], "last_at": None}
+                result[cid]["count"] += 1
+                agent = payload.get("agent")
+                if agent and agent not in result[cid]["agents"]:
+                    result[cid]["agents"].append(agent)
+                result[cid]["last_at"] = _ts_to_iso(e.timestamp)
+            return result
+        except Exception as exc:
+            logger.error("_message_stats_for: %s", exc)
+            return {}
 
     async def _latest_tags_for(self, conv_ids: list[str]) -> dict[str, list[str]]:
         """Return {conv_id: [tags]} using the latest tag_update entry per conv."""

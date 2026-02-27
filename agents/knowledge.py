@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from google.adk.agents import LlmAgent
 from agents.utils import transfer_to_triage
@@ -10,54 +9,87 @@ logger = logging.getLogger(__name__)
 _contact = STAYFORLONG_CONTACT
 
 
-async def _call_agent(session_id: str, text: str, language_code: str = "en") -> str:
-    """Call the Vertex AI Agent Designer agent via Dialogflow CX detect_intent."""
-    if not config.HELP_CENTER_AGENT_ID:
-        return ""  # Caller will use fallback contact message
+def _search_vertex_ai(query: str) -> str:
+    """Query the Vertex AI Search data store and return a synthesised answer."""
+    from google.cloud import discoveryengine_v1 as discoveryengine
 
-    from google.cloud.dialogflowcx_v3beta1.services.sessions import SessionsAsyncClient
-    from google.cloud.dialogflowcx_v3beta1.types import (
-        DetectIntentRequest,
-        QueryInput,
-        TextInput,
-    )
+    project = config.GOOGLE_CLOUD_PROJECT
+    datastore_id = config.VERTEX_AI_SEARCH_ENGINE_ID
 
-    # Extract location from HELP_CENTER_AGENT_ID
-    # Format: projects/PROJECT/locations/LOCATION/agents/AGENT_ID
-    parts = config.HELP_CENTER_AGENT_ID.split("/")
-    location = parts[3] if len(parts) >= 6 else "us-central1"
+    client = discoveryengine.SearchServiceClient()
 
-    client = SessionsAsyncClient(
-        client_options={"api_endpoint": f"{location}-dialogflow.googleapis.com"}
-    )
-    session_path = f"{config.HELP_CENTER_AGENT_ID}/sessions/{session_id}"
-    request = DetectIntentRequest(
-        session=session_path,
-        query_input=QueryInput(
-            text=TextInput(text=text),
-            language_code=language_code,
-        ),
-    )
-    response = await client.detect_intent(request=request)
+    base = f"projects/{project}/locations/global/collections/default_collection"
+    candidate_configs = [
+        f"{base}/engines/{datastore_id}/servingConfigs/default_search",
+        f"{base}/engines/{datastore_id}/servingConfigs/default_config",
+        f"{base}/dataStores/{datastore_id}/servingConfigs/default_search",
+        f"{base}/dataStores/{datastore_id}/servingConfigs/default_config",
+    ]
 
-    # Collect all text response messages
-    parts_text = []
-    for msg in response.query_result.response_messages:
-        if msg.text and msg.text.text:
-            parts_text.extend(msg.text.text)
-    return " ".join(parts_text).strip()
+    def _build_request(serving_config: str) -> discoveryengine.SearchRequest:
+        return discoveryengine.SearchRequest(
+            serving_config=serving_config,
+            query=query,
+            page_size=5,
+            content_search_spec=discoveryengine.SearchRequest.ContentSearchSpec(
+                summary_spec=discoveryengine.SearchRequest.ContentSearchSpec.SummarySpec(
+                    summary_result_count=5,
+                    include_citations=False,
+                    language_code="es",
+                ),
+                snippet_spec=discoveryengine.SearchRequest.ContentSearchSpec.SnippetSpec(
+                    return_snippet=True,
+                ),
+            ),
+            query_expansion_spec=discoveryengine.SearchRequest.QueryExpansionSpec(
+                condition=discoveryengine.SearchRequest.QueryExpansionSpec.Condition.AUTO,
+            ),
+        )
+
+    response = None
+    last_exc = None
+    for cfg in candidate_configs:
+        try:
+            logger.info("Trying serving_config: %s", cfg)
+            response = client.search(_build_request(cfg))
+            logger.info("Success with serving_config: %s", cfg)
+            break
+        except Exception as exc:
+            logger.warning("Failed serving_config %s: %s", cfg, exc)
+            last_exc = exc
+
+    if response is None:
+        raise last_exc
+
+    # Prefer the auto-generated summary when available
+    summary_text = ""
+    if response.summary and response.summary.summary_text:
+        summary_text = response.summary.summary_text.strip()
+
+    if summary_text:
+        return summary_text
+
+    # Fall back to concatenating the top snippets
+    snippets = []
+    for result in response.results:
+        doc_data = result.document.derived_struct_data
+        for snippet_item in doc_data.get("snippets", []):
+            snippet = snippet_item.get("snippet", "").strip()
+            if snippet:
+                snippets.append(snippet)
+    if snippets:
+        return "\n\n".join(snippets[:3])
+
+    return ""
 
 
-def query_help_center(question: str, session_id: str = "default") -> str:
-    """Ask the Stayforlong help center agent (powered by Vertex AI Agent Designer) about
+def query_help_center(question: str) -> str:
+    """Search the Stayforlong help center (powered by Vertex AI Search) for answers about
     platform FAQs, policies, payment methods, minimum stay rules, stay extensions,
     cancellation policies and general platform questions.
     Accepts any question in Spanish or English."""
     try:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _call_agent(session_id, question))
-            result = future.result(timeout=20)
+        result = _search_vertex_ai(question)
         if result:
             return result
         return (
@@ -66,7 +98,7 @@ def query_help_center(question: str, session_id: str = "default") -> str:
             f"✉️ {_contact['email']} | {_contact['hours']}"
         )
     except Exception as exc:
-        logger.error("query_help_center failed: %s", exc)
+        logger.error("query_help_center failed: %s", exc, exc_info=True)
         return (
             "Could not reach the help center at this moment. "
             f"Please contact Stayforlong: 📞 {_contact['phone']} | ✉️ {_contact['email']}"
@@ -78,7 +110,8 @@ knowledge_agent = LlmAgent(
     model=config.GEMINI_MODEL,
     instruction=(
         "You are the Stayforlong help center specialist. Always respond in {lang_name}. "
-        "You have access to our conversational agent powered by Vertex AI Agent Designer.\n\n"
+        "You have been transferred from the main assistant — the user's question is already in the conversation. "
+        "NEVER greet the user or say 'Hola' / 'Hello' / 'How can I help' — go straight to answering.\n\n"
 
         "SCOPE — what you handle:\n"
         "✅ General platform questions: how Stayforlong works, what it is, who it's for\n"
@@ -86,19 +119,21 @@ knowledge_agent = LlmAgent(
         "✅ Stay rules: minimum stay, extensions, early check-out\n"
         "✅ Billing: invoices, VAT, payment issues\n"
         "✅ Account: registration, login, profile management\n"
-        "✅ FAQs: any general question about the platform\n\n"
+        "✅ FAQs: any general question about the platform\n"
+        "✅ Any question not handled by other specialists — you are the final fallback\n\n"
 
-        "OUT OF SCOPE — call transfer_to_triage IMMEDIATELY, never attempt to answer:\n"
-        "🔄 Specific reservation details or booking IDs → transfer to Booking\n"
-        "🔄 Active incidents, maintenance problems, complaints → transfer to Support\n"
-        "🔄 Specific property amenities, check-in times, facilities → transfer to Alojamientos\n\n"
+        "TRANSFER to another specialist ONLY for these specific cases:\n"
+        "🔄 Specific reservation details, booking ID, booking status → call transfer_to_triage\n"
+        "🔄 Active incidents, maintenance problems, complaints during stay → call transfer_to_triage\n"
+        "🔄 Specific property amenities, check-in times, facilities → call transfer_to_triage\n\n"
 
         "INSTRUCTIONS:\n"
-        "• For EVERY question within your scope, ALWAYS call query_help_center first.\n"
+        "• For questions within your scope, call query_help_center first.\n"
         "• Present the answer clearly in {lang_name}.\n"
-        "• If query_help_center returns no relevant answer, provide the support contact:\n"
+        "• For anything truly unknown or unanswerable, NEVER call transfer_to_triage — "
+        "instead provide the support contact directly:\n"
         f"  📞 {_contact['phone']}  |  ✉️ {_contact['email']}  |  {_contact['hours']}\n"
-        "• IMPORTANT: For anything outside your scope, call transfer_to_triage IMMEDIATELY."
+        "• You are the last resort: always resolve or provide contact info, never leave the guest without an answer."
     ),
     tools=[query_help_center, transfer_to_triage],
 )
