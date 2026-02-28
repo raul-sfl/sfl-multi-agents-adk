@@ -1,8 +1,8 @@
 import logging
-from google.adk.agents import LlmAgent
 from agents.utils import transfer_to_triage
 from agents.constants import STAYFORLONG_CONTACT
 import config
+from agents.plugin import AgentPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +105,12 @@ def query_help_center(question: str) -> str:
         )
 
 
-knowledge_agent = LlmAgent(
+PLUGIN = AgentPlugin(
     name="HelpCenter",
-    model=config.GEMINI_MODEL,
+    routing_hint=(
+        "General platform FAQs, policies, payment methods, minimum stay, "
+        "extensions, account questions, and any topic not covered by other specialists"
+    ),
     instruction=(
         "You are the Stayforlong help center specialist. Always respond in {lang_name}. "
         "You have been transferred from the main assistant — the user's question is already in the conversation. "
@@ -123,9 +126,13 @@ knowledge_agent = LlmAgent(
         "✅ Any question not handled by other specialists — you are the final fallback\n\n"
 
         "TRANSFER to another specialist ONLY for these specific cases:\n"
-        "🔄 Specific reservation details, booking ID, booking status → call transfer_to_triage\n"
+        "🔄 User provides a booking ID (SFL-XXXX-NNN) or email and asks for their specific "
+        "reservation details → call transfer_to_triage\n"
         "🔄 Active incidents, maintenance problems, complaints during stay → call transfer_to_triage\n"
-        "🔄 Specific property amenities, check-in times, facilities → call transfer_to_triage\n\n"
+        "🔄 Specific property amenities, check-in times, facilities → call transfer_to_triage\n"
+        "• If user asks about their reservation WITHOUT providing a booking ID or email, "
+        "ask them to provide it: 'Para consultar tu reserva específica, necesito tu ID de reserva "
+        "(formato SFL-XXXX-NNN) o tu email.'\n\n"
 
         "INSTRUCTIONS:\n"
         "• For questions within your scope, call query_help_center first.\n"
@@ -135,5 +142,7 @@ knowledge_agent = LlmAgent(
         f"  📞 {_contact['phone']}  |  ✉️ {_contact['email']}  |  {_contact['hours']}\n"
         "• You are the last resort: always resolve or provide contact info, never leave the guest without an answer."
     ),
-    tools=[query_help_center, transfer_to_triage],
+    model=config.GEMINI_MODEL,
+    is_fallback=True,  # HelpCenter es el fallback de último recurso
+    get_tools=lambda: [query_help_center, transfer_to_triage],
 )

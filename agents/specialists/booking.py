@@ -1,9 +1,9 @@
 import json
-from google.adk.agents import LlmAgent
 from agents.utils import transfer_to_triage
 from mock_data.reservations import RESERVATIONS, EMAIL_INDEX, CANCELLATION_POLICIES
 from agents.constants import STAYFORLONG_CONTACT
 import config
+from agents.plugin import AgentPlugin
 
 
 def lookup_reservation(booking_id: str, guest_name: str = "") -> str:
@@ -98,9 +98,13 @@ def check_cancellation_policy(booking_id: str) -> str:
 
 _contact = STAYFORLONG_CONTACT
 
-booking_agent = LlmAgent(
+PLUGIN = AgentPlugin(
     name="Booking",
-    model=config.GEMINI_MODEL,
+    routing_hint=(
+        "User provides a booking ID (SFL-XXXX-NNN) or email to look up their specific "
+        "reservation details, status, price, or cancellation deadline. NOT for generic "
+        "questions like 'how do I modify/cancel a booking' without a booking ID."
+    ),
     instruction=(
         "You are the reservations specialist for Stayforlong. Always respond in {lang_name}. "
         "You have been transferred from the main assistant — the user's question is already in the conversation. "
@@ -138,5 +142,8 @@ booking_agent = LlmAgent(
         f"  📞 {_contact['phone']}  |  ✉️ {_contact['email']}  |  {_contact['hours']}\n\n"
         "IMPORTANT: For ANYTHING outside your scope, call transfer_to_triage IMMEDIATELY."
     ),
-    tools=[lookup_reservation, get_reservations_by_email, check_cancellation_policy, transfer_to_triage],
+    model=config.GEMINI_MODEL,
+    is_fallback=False,
+    get_tools=lambda: [lookup_reservation, get_reservations_by_email,
+                       check_cancellation_policy, transfer_to_triage],
 )

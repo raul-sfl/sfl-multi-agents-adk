@@ -1,40 +1,74 @@
+"""
+Triage agent — enrutador principal del asistente Stayforlong.
+
+build_triage_agent() es una factory que recibe los agentes especialistas
+descubiertos dinámicamente por AgentLoader y construye el LlmAgent de Triage
+con sus sub_agents y la instrucción de routing correcta.
+
+Llamado desde adk_runner.py:
+    loader = AgentLoader()
+    specialists, fallback = loader.build_agents()
+    triage_agent = build_triage_agent(specialists, fallback)
+"""
 from google.adk.agents import LlmAgent
-from agents.registry import SPECIALISTS, FALLBACK
+from agents.plugin import AgentPlugin
 import config
 
 
-def _build_instruction() -> str:
+def build_triage_agent(
+    specialists: list[tuple[AgentPlugin, LlmAgent]],
+    fallback: tuple[AgentPlugin, LlmAgent],
+) -> LlmAgent:
+    """
+    Construye el agente Triage con sub_agents descubiertos dinámicamente.
+
+    Args:
+        specialists: Lista de (AgentPlugin, LlmAgent) para agentes no-fallback.
+                     El orden determina la prioridad en la instrucción de routing.
+        fallback:    (AgentPlugin, LlmAgent) del agente de último recurso.
+
+    Returns:
+        LlmAgent configurado con sub_agents y routing instruction completa.
+    """
+    fallback_plugin, fallback_agent = fallback
+
     routing_bullets = "\n".join(
-        f"• {entry.routing_hint} → transfer to {entry.agent.name}"
-        for entry in SPECIALISTS
+        f"• {plugin.routing_hint} → transfer to {agent.name}"
+        for plugin, agent in specialists
     )
+
+    instruction = _build_instruction(routing_bullets, fallback_agent.name)
+
+    return LlmAgent(
+        name="Triage",
+        model=config.GEMINI_MODEL,
+        instruction=instruction,
+        sub_agents=[agent for _, agent in specialists] + [fallback_agent],
+    )
+
+
+def _build_instruction(routing_bullets: str, fallback_name: str) -> str:
     return (
         "You are the virtual assistant for Stayforlong, a long-stay apartment platform in Europe. "
         "Always respond in {lang_name}. If the user writes in a different language, follow their language.\n\n"
         "Your only job is to understand the user's intent and immediately delegate to the correct specialist. "
         "Do NOT answer domain questions yourself. Always transfer:\n\n"
         f"{routing_bullets}\n"
-        f"• Any other question → transfer to {FALLBACK.name} (general help center)\n\n"
+        f"• Any other question → transfer to {fallback_name} (general help center)\n\n"
         "CRITICAL ROUTING RULES:\n"
-        "• Transfer to Booking ONLY when the user provides a booking ID (SFL-XXXX-NNN) or email "
-        "to look up a specific reservation.\n"
-        "• ANY question without a booking ID about modifying, cancelling, extending, paying for "
-        "or understanding a reservation → HelpCenter (these are platform/FAQ questions).\n"
-        "• Examples that go to HelpCenter (NOT Booking):\n"
-        "  - '¿Cómo puedo modificar mi reserva?' → HelpCenter\n"
-        "  - '¿Puedo cancelar mi reserva?' → HelpCenter\n"
-        "  - '¿Cómo funciona el pago?' → HelpCenter\n"
-        "  - '¿Puedo ampliar mi estancia?' → HelpCenter\n"
+        "• Transfer to Booking when the user asks about THEIR OWN specific reservation "
+        "(status, dates, price, cancellation deadline, payment, etc.) — even without a booking ID. "
+        "Booking will ask for the ID or email if needed.\n"
+        "• Transfer to HelpCenter ONLY for GENERAL platform questions (how policies work, "
+        "platform FAQs, payment methods, minimum stay rules) — NOT for personal reservation lookups.\n"
         "• Examples that go to Booking:\n"
+        "  - '¿Cuál es el estado de mi reserva?' → Booking\n"
+        "  - '¿Cuánto pagué por mi reserva?' → Booking\n"
         "  - 'Quiero ver mi reserva SFL-2024-001' → Booking\n"
-        "  - 'Mi email es juan@gmail.com, ¿cuál es mi reserva?' → Booking\n\n"
+        "  - 'Mi email es juan@gmail.com, ¿cuál es mi reserva?' → Booking\n"
+        "• Examples that go to HelpCenter (general, not personal):\n"
+        "  - '¿Cuáles son las políticas de cancelación de Stayforlong?' → HelpCenter\n"
+        "  - '¿Cómo funciona el pago en la plataforma?' → HelpCenter\n"
+        "  - '¿Puedo ampliar una estancia en general?' → HelpCenter\n\n"
         "If you truly cannot determine the topic, ask for clarification in {lang_name}."
     )
-
-
-triage_agent = LlmAgent(
-    name="Triage",
-    model=config.GEMINI_MODEL,
-    instruction=_build_instruction(),
-    sub_agents=[entry.agent for entry in SPECIALISTS] + [FALLBACK],
-)

@@ -1,9 +1,9 @@
 import json
-from google.adk.agents import LlmAgent
 from agents.utils import transfer_to_triage
 from mock_data.properties import PROPERTIES, PROPERTY_ALIASES
 from agents.constants import STAYFORLONG_CONTACT, STAYFORLONG_BASE_URL
 import config
+from agents.plugin import AgentPlugin
 
 PROPERTY_URLS = {
     "PROP-BCN-001": f"{STAYFORLONG_BASE_URL}/apartamentos-barcelona/gran-via",
@@ -154,9 +154,9 @@ def get_checkin_info(property_id: str) -> str:
 
 _contact = STAYFORLONG_CONTACT
 
-property_agent = LlmAgent(
+PLUGIN = AgentPlugin(
     name="Alojamientos",
-    model=config.GEMINI_MODEL,
+    routing_hint="Accommodation info, amenities, check-in/out times, facilities",
     instruction=(
         "You are the accommodation specialist for Stayforlong, a long-stay apartment platform. "
         "Always respond in {lang_name}. "
@@ -187,5 +187,7 @@ property_agent = LlmAgent(
         "Always include the stayforlong_url in your response so the guest can see full details.\n\n"
         "IMPORTANT: For ANYTHING outside your scope, call transfer_to_triage IMMEDIATELY."
     ),
-    tools=[lookup_property, get_property_amenities, get_checkin_info, transfer_to_triage],
+    model=config.GEMINI_MODEL,
+    is_fallback=False,
+    get_tools=lambda: [lookup_property, get_property_amenities, get_checkin_info, transfer_to_triage],
 )

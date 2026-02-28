@@ -1,4 +1,12 @@
 import os
+
+# In Vertex AI Agent Engine runtime, _vertex_env.py is bundled via extra_packages
+# and pre-sets os.environ with project/location/model values. Safe no-op locally.
+try:
+    import _vertex_env  # noqa: F401
+except ImportError:
+    pass
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,10 +48,29 @@ AGENT_ENGINE_LOCATION = os.environ.get("AGENT_ENGINE_LOCATION", GOOGLE_CLOUD_LOC
 VERTEX_AI_SEARCH_ENGINE_ID = os.environ.get("VERTEX_AI_SEARCH_ENGINE_ID", "")
 
 # ── Vertex AI Agent Engine (VertexAiSessionService) ──────────────────────────
-# Numeric resource ID of the reasoning engine, e.g. "1234567890123456"
+# Numeric resource ID of the Triage reasoning engine (session storage).
+# TRIAGE_ENGINE_ID is the canonical name; AGENT_ENGINE_ID is supported as alias.
 # Get it from: gcloud ai reasoning-engines list --location=LOCATION
 # If empty, falls back to InMemorySessionService (local dev without GCP)
-AGENT_ENGINE_ID = os.environ.get("AGENT_ENGINE_ID", "")
+TRIAGE_ENGINE_ID = (
+    os.environ.get("TRIAGE_ENGINE_ID")
+    or os.environ.get("AGENT_ENGINE_ID", "")
+)
+AGENT_ENGINE_ID = TRIAGE_ENGINE_ID  # backward-compat alias
+
+# ── Vertex AI Agent Provisioning ─────────────────────────────────────────────
+# GCS bucket for staging agent artifacts when deploying to Vertex AI.
+# Format: gs://your-bucket-name  (only required to run provision.py)
+VERTEX_STAGING_BUCKET = os.environ.get("VERTEX_STAGING_BUCKET", "")
+
+# Python packages bundled when deploying agent plugins to Vertex AI Reasoning Engine.
+VERTEX_AGENT_REQUIREMENTS = [
+    "google-adk",
+    "google-cloud-discoveryengine",
+    "google-cloud-logging>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
 
 # ── Conversation logging (Cloud Logging) ─────────────────────────────────────
 # Set CLOUD_LOGGING_ENABLED=false to disable (logs go nowhere).

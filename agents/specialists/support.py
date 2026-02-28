@@ -1,10 +1,10 @@
 import json
 import uuid
-from google.adk.agents import LlmAgent
 from agents.utils import transfer_to_triage
 from mock_data.incidents import INCIDENTS, INCIDENT_CATEGORIES, runtime_incidents
 from agents.constants import STAYFORLONG_CONTACT
 import config
+from agents.plugin import AgentPlugin
 
 
 def lookup_incident(ticket_id: str) -> str:
@@ -79,9 +79,9 @@ def escalate_to_human(reason: str) -> str:
 
 _contact = STAYFORLONG_CONTACT
 
-support_agent = LlmAgent(
+PLUGIN = AgentPlugin(
     name="Support",
-    model=config.GEMINI_MODEL,
+    routing_hint="Incidents, complaints, maintenance problems, issues during stay",
     instruction=(
         "You are the support agent for Stayforlong. Always respond in {lang_name}. "
         "You have been transferred from the main assistant — the user's question is already in the conversation. "
@@ -107,5 +107,7 @@ support_agent = LlmAgent(
         f"  📞 {_contact['phone']}  |  ✉️ {_contact['email']}  |  {_contact['hours']}\n\n"
         "IMPORTANT: For ANYTHING outside your scope, call transfer_to_triage IMMEDIATELY."
     ),
-    tools=[lookup_incident, create_incident, escalate_to_human, transfer_to_triage],
+    model=config.GEMINI_MODEL,
+    is_fallback=False,
+    get_tools=lambda: [lookup_incident, create_incident, escalate_to_human, transfer_to_triage],
 )
