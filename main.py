@@ -38,12 +38,12 @@ _provision_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="prov
 @app.on_event("startup")
 async def startup_provision():
     """
-    Aprovisiona agentes en Vertex AI en background al arrancar el servidor.
+    Provisions agents on Vertex AI in the background on server startup.
 
-    Fast-path: si todos los agentes ya están registrados, la función termina
-    en ~2s sin hacer ningún despliegue. No bloquea el handling de requests.
-    Se omite silenciosamente si GOOGLE_CLOUD_PROJECT o VERTEX_STAGING_BUCKET
-    no están configurados (modo desarrollo local sin GCP).
+    Fast-path: if all agents are already registered the function completes
+    in ~2s without any deployment. Does not block request handling.
+    Silently skipped if GOOGLE_CLOUD_PROJECT or VERTEX_STAGING_BUCKET
+    are not configured (local dev without GCP).
     """
     if not config.GOOGLE_CLOUD_PROJECT or not config.VERTEX_STAGING_BUCKET:
         return

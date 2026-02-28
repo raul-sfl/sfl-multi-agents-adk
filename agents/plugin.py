@@ -1,11 +1,11 @@
 """
-AgentPlugin — contrato estándar para agentes especialistas auto-descubiertos.
+AgentPlugin — standard contract for auto-discovered specialist agents.
 
-Cada módulo en backend/agents/specialists/ debe exportar una variable PLUGIN
-de este tipo. AgentLoader escanea ese directorio y construye LlmAgent objects
-dinámicamente a partir de estos metadatos.
+Each module in agents/specialists/ must export a PLUGIN variable of this type.
+AgentLoader scans that directory and dynamically builds LlmAgent objects
+from these metadata descriptors.
 
-Separar esta definición de agent_loader.py evita importaciones circulares:
+Keeping this definition separate from agent_loader.py avoids circular imports:
     specialists/*.py  →  agents/plugin.py
     agent_loader.py   →  agents/plugin.py  +  agents/specialists.*
 """
@@ -16,23 +16,23 @@ from typing import Callable
 @dataclass
 class AgentPlugin:
     name: str
-    """Nombre del agente. Debe coincidir con LlmAgent.name y es único por app."""
+    """Agent name. Must match LlmAgent.name and be unique within the app."""
 
     routing_hint: str
-    """Una línea que describe cuándo el Triage debe transferir a este agente.
-    Se inserta tal cual en la instrucción del Triage como bullet point."""
+    """One-line description of when the Triage should transfer to this agent.
+    Inserted verbatim as a bullet point in the Triage agent's instruction."""
 
     instruction: str
-    """System prompt completo del agente. Puede contener {lang_name} —
-    ADK lo interpola automáticamente desde el estado de sesión."""
+    """Full system prompt for the agent. May contain {lang_name} —
+    ADK interpolates it automatically from the session state."""
 
     model: str
-    """Nombre del modelo Gemini, p.ej. config.GEMINI_MODEL."""
+    """Gemini model name, e.g. config.GEMINI_MODEL."""
 
     is_fallback: bool = False
-    """True únicamente para el agente de último recurso (HelpCenter/Knowledge).
-    Exactamente 1 plugin en specialists/ debe tener is_fallback=True."""
+    """True only for the last-resort fallback agent (HelpCenter/Knowledge).
+    Exactly 1 plugin in specialists/ must have is_fallback=True."""
 
     get_tools: Callable[[], list] = field(default_factory=lambda: (lambda: []))
-    """Callable sin argumentos que devuelve la lista de funciones-herramienta.
-    Se llama en build_agents() para asociar las tools locales al LlmAgent."""
+    """Zero-argument callable that returns the list of tool functions.
+    Called in build_agents() to attach local tools to the LlmAgent."""

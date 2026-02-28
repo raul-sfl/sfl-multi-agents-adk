@@ -39,7 +39,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # Vertex AI — set GOOGLE_GENAI_USE_VERTEXAI=true to use Vertex instead of AI Studio
 # Also requires: GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION
 # Local auth: gcloud auth application-default login
-# Railway: set GOOGLE_APPLICATION_CREDENTIALS to service account JSON path
+# Railway: set GOOGLE_APPLICATION_CREDENTIALS_JSON to the service account JSON content
 _use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
 if _use_vertex:
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"

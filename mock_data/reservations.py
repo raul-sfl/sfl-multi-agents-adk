@@ -58,7 +58,7 @@ RESERVATIONS = {
 EMAIL_INDEX = {r["email"]: r for r in RESERVATIONS.values()}
 
 CANCELLATION_POLICIES = {
-    "flexible": "Cancellación gratuita hasta 5 días antes del check-in. Después: reembolso del 50%.",
-    "moderate": "Cancellación gratuita hasta 7 días antes. Entre 7 y 3 días: reembolso del 50%. Menos de 3 días: sin reembolso.",
-    "strict": "Cancellación gratuita hasta 14 días antes. Entre 14 y 7 días: reembolso del 25%. Menos de 7 días: sin reembolso.",
+    "flexible": "Free cancellation up to 5 days before check-in. After that: 50% refund.",
+    "moderate": "Free cancellation up to 7 days before. Between 7 and 3 days: 50% refund. Less than 3 days: no refund.",
+    "strict": "Free cancellation up to 14 days before. Between 14 and 7 days: 25% refund. Less than 7 days: no refund.",
 }

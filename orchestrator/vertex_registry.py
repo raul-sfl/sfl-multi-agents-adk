@@ -1,26 +1,25 @@
 """
-VertexRegistry — gestiona el sistema multi-agente en Vertex AI Agent Engine.
+VertexRegistry — manages the multi-agent system on Vertex AI Agent Engine.
 
-El sistema completo (Triage + todos los especialistas) se despliega como UN ÚNICO
-Vertex AI Reasoning Engine resource. Esto sigue el patrón ADK estándar:
-  - root_agent (con sub_agents) → AdkApp → agent_engines.create()
+The full system (Triage + all specialists) is deployed as a SINGLE
+Vertex AI Reasoning Engine resource. This follows the standard ADK pattern:
+  - root_agent (with sub_agents) → AdkApp → agent_engines.create()
 
-Beneficios vs. deploy por agente separado:
-  - El routing inter-agente funciona (transfer_to_agent opera dentro del árbol)
-  - Un solo recurso visible en Vertex AI console con el sistema completo
-  - Cloud Trace muestra trazas por agente individual dentro de cada conversación
-  - Más robusto: los agentes no son entidades aisladas sin contexto
-  - Sigue la convención ADK estándar
+Advantages over per-agent deployment:
+  - Inter-agent routing works (transfer_to_agent operates within the tree)
+  - Single resource visible in Vertex AI console with the full system
+  - Cloud Trace shows per-agent traces within each conversation
+  - More robust: agents are not isolated entities without context
+  - Follows the standard ADK convention
 
-Nombre del recurso: "stayforlong-multiagent"
+Resource name: "stayforlong-multiagent"
 
 CLI:
-    cd backend
-    python -m orchestrator.provision             # deploy si no existe
-    python -m orchestrator.provision --force     # redeploy (update instrucciones)
-    python -m orchestrator.provision --list      # ver estado actual
-    python -m orchestrator.provision --delete    # eliminar recurso
-    python -m orchestrator.provision --purge-orphans  # limpiar recursos anteriores
+    python -m orchestrator.provision             # deploy if not exists
+    python -m orchestrator.provision --force     # redeploy (update instructions)
+    python -m orchestrator.provision --list      # show current state
+    python -m orchestrator.provision --delete    # delete resource
+    python -m orchestrator.provision --purge-orphans  # clean up previous resources
 """
 import logging
 import os
@@ -35,25 +34,25 @@ import config
 logger = logging.getLogger(__name__)
 
 _SYSTEM_DISPLAY_NAME = "stayforlong-multiagent"
-_ORPHAN_PREFIX = "stayforlong-agent-"  # prefijo de recursos de la tentativa anterior
+_ORPHAN_PREFIX = "stayforlong-agent-"  # prefix of resources from a previous attempt
 
 
 @dataclass
 class SystemResource:
-    resource_name: str  # path completo: projects/P/locations/L/reasoningEngines/N
-    numeric_id: str     # solo el número: "1234567890123456"
+    resource_name: str  # full path: projects/P/locations/L/reasoningEngines/N
+    numeric_id: str     # numeric portion only: "1234567890123456"
     display_name: str
 
 
 class VertexRegistry:
     """
-    Gestiona el recurso Vertex AI Reasoning Engine del sistema multi-agente.
+    Manages the Vertex AI Reasoning Engine resource for the multi-agent system.
 
-    El árbol completo (root_agent con todos los sub_agents) se despliega como
-    un único recurso llamado "stayforlong-multiagent".
+    The full tree (root_agent with all sub_agents) is deployed as a single
+    resource named "stayforlong-multiagent".
 
-    El código local (agents/, mock_data/, config.py) se bundlea como extra_packages
-    junto con _vertex_env.py generado que inyecta los valores de config en el runtime.
+    Local code (agents/, mock_data/, config.py) is bundled as extra_packages
+    alongside a generated _vertex_env.py that injects config values at runtime.
     """
 
     def __init__(self):
@@ -62,7 +61,7 @@ class VertexRegistry:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_system(self) -> Optional[SystemResource]:
-        """Devuelve el recurso del sistema si está desplegado, o None."""
+        """Return the system resource if deployed, or None."""
         self._init()
         from vertexai import agent_engines
         try:
@@ -76,11 +75,11 @@ class VertexRegistry:
                         display_name=dn,
                     )
         except Exception:
-            logger.exception("Error al buscar el sistema en Vertex AI")
+            logger.exception("Error looking up system in Vertex AI")
         return None
 
     def list_all(self) -> list[SystemResource]:
-        """Lista TODOS los recursos stayforlong-* (sistema + posibles huérfanos)."""
+        """List ALL stayforlong-* resources (system + possible orphans)."""
         self._init()
         from vertexai import agent_engines
         results = []
@@ -95,27 +94,27 @@ class VertexRegistry:
                         display_name=dn,
                     ))
         except Exception:
-            logger.exception("Error al listar recursos Vertex AI")
+            logger.exception("Error listing Vertex AI resources")
         return results
 
     def deploy_system(self, root_agent, staging_bucket: str) -> SystemResource:
         """
-        Despliega el árbol multi-agente completo como un único Vertex AI resource.
+        Deploy the full multi-agent tree as a single Vertex AI resource.
 
-        Bundlea el código local (agents/, mock_data/, config.py) y un _vertex_env.py
-        generado con los valores de config actuales para el runtime de Vertex AI.
+        Bundles local code (agents/, mock_data/, config.py) and a generated
+        _vertex_env.py with current config values for the Vertex AI runtime.
 
         Args:
-            root_agent: El LlmAgent raíz (Triage con todos los sub_agents).
-            staging_bucket: GCS bucket gs://... para staging del artefacto.
+            root_agent: The root LlmAgent (Triage with all sub_agents).
+            staging_bucket: GCS bucket gs://... for artifact staging.
 
         Returns:
-            SystemResource con resource_name y numeric_id del recurso creado.
+            SystemResource with the resource_name and numeric_id of the created resource.
         """
         if not staging_bucket:
             raise RuntimeError(
-                "VERTEX_STAGING_BUCKET no configurado. "
-                "Establece gs://tu-bucket en .env para desplegar el sistema."
+                "VERTEX_STAGING_BUCKET not configured. "
+                "Set VERTEX_STAGING_BUCKET=gs://your-bucket in .env to deploy the system."
             )
 
         self._init()
@@ -129,15 +128,15 @@ class VertexRegistry:
             staging_bucket=staging_bucket,
         )
 
-        # CRÍTICO: registrar módulos locales para serialización by-value ANTES de AdkApp.
-        # Sin esto, cloudpickle serializa las tool functions por referencia al módulo
-        # ('agents.specialists.booking.lookup_reservation') y el runtime de Vertex AI
-        # falla con 'No module named agents' al intentar importarlo.
-        # Con register_pickle_by_value el bytecode queda inline en el pickle.
+        # CRITICAL: register local modules for by-value serialization BEFORE AdkApp.
+        # Without this, cloudpickle serializes tool functions by module reference
+        # (e.g. 'agents.specialists.booking.lookup_reservation') and the Vertex AI
+        # runtime fails with 'No module named agents' when trying to import it.
+        # With register_pickle_by_value the bytecode is inlined in the pickle.
         self._register_local_modules_for_pickle()
 
         adk_app = AdkApp(agent=root_agent, enable_tracing=True)
-        logger.info("Desplegando sistema '%s' en Vertex AI Agent Engine...", _SYSTEM_DISPLAY_NAME)
+        logger.info("Deploying system '%s' to Vertex AI Agent Engine...", _SYSTEM_DISPLAY_NAME)
 
         tmp_dir = tempfile.mkdtemp(prefix="sfl_vertex_")
         try:
@@ -149,14 +148,14 @@ class VertexRegistry:
                 display_name=_SYSTEM_DISPLAY_NAME,
                 description=(
                     "Stayforlong multi-agent system: Triage + Booking + Support + "
-                    "Alojamientos + HelpCenter. Managed via vertex_registry.py."
+                    "Property + HelpCenter. Managed via vertex_registry.py."
                 ),
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         rn = engine.resource_name
-        logger.info("Sistema desplegado: %s", rn)
+        logger.info("System deployed: %s", rn)
         return SystemResource(
             resource_name=rn,
             numeric_id=rn.split("/")[-1],
@@ -165,37 +164,37 @@ class VertexRegistry:
 
     def update_system(self, root_agent, staging_bucket: str) -> SystemResource:
         """
-        Elimina el recurso existente y redespliega el sistema con la versión actual.
+        Delete the existing resource and redeploy the system with the current version.
 
-        Usar cuando cambian instrucciones, tools o el modelo de cualquier agente.
-        Equivale a: --force en provision.py
+        Use when instructions, tools, or the model of any agent change.
+        Equivalent to: --force in provision.py
         """
         existing = self.get_system()
         if existing:
-            logger.info("Eliminando sistema anterior (%s)...", existing.resource_name)
+            logger.info("Deleting existing system (%s)...", existing.resource_name)
             self._delete_resource(existing.resource_name)
         return self.deploy_system(root_agent, staging_bucket)
 
     def delete_system(self) -> bool:
         """
-        Elimina el recurso del sistema de Vertex AI.
+        Delete the system resource from Vertex AI.
 
         Returns:
-            True si se eliminó, False si no existía.
+            True if deleted, False if it did not exist.
         """
         existing = self.get_system()
         if not existing:
-            logger.warning("Sistema '%s' no encontrado en Vertex AI.", _SYSTEM_DISPLAY_NAME)
+            logger.warning("System '%s' not found in Vertex AI.", _SYSTEM_DISPLAY_NAME)
             return False
         self._delete_resource(existing.resource_name)
         return True
 
     def purge_orphans(self) -> list[str]:
         """
-        Elimina recursos huérfanos con el prefijo 'stayforlong-agent-' (tentativa anterior).
+        Delete orphan resources with prefix 'stayforlong-agent-' from a previous attempt.
 
         Returns:
-            Lista de resource_names eliminados.
+            List of deleted resource_names.
         """
         self._init()
         from vertexai import agent_engines
@@ -205,31 +204,31 @@ class VertexRegistry:
                 dn = getattr(engine._gca_resource, "display_name", "") or ""
                 if dn.startswith(_ORPHAN_PREFIX):
                     rn = engine.resource_name
-                    logger.info("Eliminando huérfano '%s' (%s)...", dn, rn)
+                    logger.info("Deleting orphan '%s' (%s)...", dn, rn)
                     self._delete_resource(rn)
                     deleted.append(rn)
         except Exception:
-            logger.exception("Error al eliminar recursos huérfanos")
+            logger.exception("Error deleting orphan resources")
         return deleted
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _register_local_modules_for_pickle(self) -> None:
         """
-        Registra módulos locales para serialización by-value con cloudpickle.
+        Register local modules for by-value serialization with cloudpickle.
 
-        Problema sin este método:
-            cloudpickle serializa las tool functions por referencia a su módulo
-            (ej. 'agents.specialists.booking.lookup_reservation'). El runtime de
-            Vertex AI intenta `import agents.specialists.booking` y falla con
-            'No module named agents' aunque estén en extra_packages.
+        Problem without this method:
+            cloudpickle serializes tool functions by module reference
+            (e.g. 'agents.specialists.booking.lookup_reservation'). The Vertex AI
+            runtime tries `import agents.specialists.booking` and fails with
+            'No module named agents' even though they are in extra_packages.
 
-        Solución:
-            register_pickle_by_value(module) hace que cloudpickle serialice el
-            BYTECODE de las funciones directamente en el pickle (by value, no by ref).
-            El runtime de Vertex AI desempaqueta el pickle sin necesitar importar nada.
+        Solution:
+            register_pickle_by_value(module) makes cloudpickle serialize the
+            BYTECODE of the functions directly into the pickle (by value, not by ref).
+            The Vertex AI runtime unpickles without needing to import anything.
 
-        Referencia:
+        Reference:
             https://cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/troubleshooting/deploy
             "ensure all necessary dependencies used by the agent object are included"
         """
@@ -262,7 +261,7 @@ class VertexRegistry:
                 logger.debug("Skip by-value pickle (not found): %s", mod_name)
 
         logger.info(
-            "Módulos locales registrados para by-value pickle: %d módulos",
+            "Registered %d local modules for by-value pickle.",
             len(local_modules),
         )
 
@@ -270,7 +269,7 @@ class VertexRegistry:
         if self._initialized:
             return
         if not config.GOOGLE_CLOUD_PROJECT:
-            raise RuntimeError("GOOGLE_CLOUD_PROJECT no está configurado.")
+            raise RuntimeError("GOOGLE_CLOUD_PROJECT is not configured.")
         import vertexai
         vertexai.init(
             project=config.GOOGLE_CLOUD_PROJECT,
@@ -283,19 +282,19 @@ class VertexRegistry:
         try:
             engine = agent_engines.get(resource_name)
             engine.delete(force=True)
-            logger.info("Recurso eliminado: %s", resource_name)
+            logger.info("Resource deleted: %s", resource_name)
         except Exception:
-            logger.exception("Error al eliminar recurso %s", resource_name)
+            logger.exception("Error deleting resource %s", resource_name)
 
     def _get_extra_packages(self, tmp_dir: str) -> list[str]:
         """
-        Construye la lista de extra_packages para agent_engines.create().
+        Build the extra_packages list for agent_engines.create().
 
-        Incluye el código local necesario para que el sistema funcione en Vertex AI:
+        Includes local code needed for the system to run on Vertex AI:
           - agents/      → utils, constants, plugin, triage, specialists/*
-          - mock_data/   → datos de prueba (booking, support, property)
-          - config.py    → módulo de configuración (importa _vertex_env en runtime)
-          - _vertex_env.py → generado con valores actuales de config
+          - mock_data/   → test data (booking, support, property)
+          - config.py    → configuration module (imports _vertex_env at runtime)
+          - _vertex_env.py → generated with current config values
         """
         backend_dir = Path(__file__).parent.parent
         vertex_env_path = self._generate_vertex_env(tmp_dir)
@@ -308,15 +307,15 @@ class VertexRegistry:
 
     def _generate_vertex_env(self, tmp_dir: str) -> str:
         """
-        Genera un _vertex_env.py con los valores de config actuales baked-in.
+        Generate a _vertex_env.py with current config values baked in.
 
-        Este archivo se bundlea en el artefacto desplegado en Vertex AI.
-        config.py lo importa (try/except ImportError) para inyectar en os.environ
-        los valores de proyecto/location/model sin necesitar .env en el runtime.
+        This file is bundled in the artifact deployed to Vertex AI.
+        config.py imports it (try/except ImportError) to inject project/location/model
+        values into os.environ without needing a .env file at runtime.
         """
         lines = [
-            "# Auto-generado por provision.py — NO editar manualmente.",
-            "# Inyecta variables de entorno en el runtime de Vertex AI Agent Engine.",
+            "# Auto-generated by provision.py — DO NOT edit manually.",
+            "# Injects environment variables into the Vertex AI Agent Engine runtime.",
             "import os",
             f"os.environ.setdefault('GOOGLE_CLOUD_PROJECT', {repr(config.GOOGLE_CLOUD_PROJECT)})",
             f"os.environ.setdefault('GOOGLE_CLOUD_LOCATION', {repr(config.AGENT_ENGINE_LOCATION)})",
@@ -327,5 +326,5 @@ class VertexRegistry:
         path = os.path.join(tmp_dir, "_vertex_env.py")
         with open(path, "w") as fh:
             fh.write("\n".join(lines) + "\n")
-        logger.debug("_vertex_env.py generado en %s", path)
+        logger.debug("_vertex_env.py generated at %s", path)
         return path

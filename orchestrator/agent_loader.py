@@ -1,17 +1,17 @@
 """
-AgentLoader — descubre y construye agentes especialistas dinámicamente.
+AgentLoader — dynamically discovers and builds specialist agents.
 
-Escanea backend/agents/specialists/ buscando módulos que exporten
-PLUGIN: AgentPlugin y construye LlmAgent objects a partir de ellos.
+Scans agents/specialists/ for modules that export PLUGIN: AgentPlugin
+and builds LlmAgent objects from them.
 
-Uso en adk_runner.py:
+Usage in adk_runner.py:
     loader = AgentLoader()
     specialists, fallback = loader.build_agents()
     triage = build_triage_agent(specialists, fallback)
 
-Uso en provision.py:
+Usage in provision.py:
     loader = AgentLoader()
-    plugins = loader.get_plugins()  # solo metadatos, sin construir LlmAgent
+    plugins = loader.get_plugins()  # metadata only, no LlmAgent construction
 """
 import importlib
 import pkgutil
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentLoader:
-    """Escanea agents/specialists/ y construye LlmAgent objects en startup."""
+    """Scans agents/specialists/ and builds LlmAgent objects at startup."""
 
     _SPECIALISTS_PACKAGE = "agents.specialists"
 
@@ -38,13 +38,13 @@ class AgentLoader:
         self,
     ) -> tuple[list[tuple[AgentPlugin, LlmAgent]], tuple[AgentPlugin, LlmAgent]]:
         """
-        Construye y devuelve todos los agentes especialistas.
+        Build and return all specialist agents.
 
         Returns:
-            (specialists, fallback) donde:
-            - specialists: lista de (AgentPlugin, LlmAgent) para agentes no-fallback,
-              en el orden en que aparecen en el filesystem.
-            - fallback: (AgentPlugin, LlmAgent) del único agente con is_fallback=True.
+            (specialists, fallback) where:
+            - specialists: list of (AgentPlugin, LlmAgent) for non-fallback agents,
+              in filesystem discovery order.
+            - fallback: (AgentPlugin, LlmAgent) for the single is_fallback=True agent.
         """
         self._ensure_loaded()
         specialists: list[tuple[AgentPlugin, LlmAgent]] = []
@@ -65,7 +65,7 @@ class AgentLoader:
         return specialists, fallback  # type: ignore[return-value]
 
     def get_plugins(self) -> list[AgentPlugin]:
-        """Devuelve los metadatos crudos sin construir LlmAgent (para provision.py)."""
+        """Return raw plugin metadata without building LlmAgent objects (used by provision.py)."""
         self._ensure_loaded()
         return list(self._plugins)
 
@@ -87,25 +87,25 @@ class AgentLoader:
                 if hasattr(mod, "PLUGIN") and isinstance(mod.PLUGIN, AgentPlugin):
                     self._plugins.append(mod.PLUGIN)
                     logger.info(
-                        "Cargado plugin de agente: %s (fallback=%s)",
+                        "Loaded agent plugin: %s (fallback=%s)",
                         mod.PLUGIN.name,
                         mod.PLUGIN.is_fallback,
                     )
                 else:
                     logger.warning(
-                        "Módulo %s no tiene atributo PLUGIN: AgentPlugin — omitido.",
+                        "Module %s has no PLUGIN: AgentPlugin attribute — skipped.",
                         full_name,
                     )
             except Exception:
-                logger.exception("Error al cargar plugin %s", full_name)
+                logger.exception("Error loading plugin %s", full_name)
 
     def _validate(self) -> None:
         fallbacks = [p for p in self._plugins if p.is_fallback]
         if len(fallbacks) != 1:
             raise ValueError(
-                f"Se esperaba exactamente 1 plugin con is_fallback=True, "
-                f"encontrados {len(fallbacks)}: {[p.name for p in fallbacks]}. "
-                f"Verifica agents/specialists/ — exactamente un módulo debe tener "
+                f"Expected exactly 1 plugin with is_fallback=True, "
+                f"found {len(fallbacks)}: {[p.name for p in fallbacks]}. "
+                f"Check agents/specialists/ — exactly one module must have "
                 f"PLUGIN = AgentPlugin(..., is_fallback=True)."
             )
 
@@ -114,5 +114,5 @@ class AgentLoader:
         duplicates = [n for n in names if n in seen or seen.add(n)]  # type: ignore[func-returns-value]
         if duplicates:
             raise ValueError(
-                f"Nombres de agente duplicados en agents/specialists/: {duplicates}"
+                f"Duplicate agent names in agents/specialists/: {duplicates}"
             )

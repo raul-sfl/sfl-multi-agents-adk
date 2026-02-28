@@ -6,7 +6,7 @@ from agent import root_agent  # Standard ADK entrypoint — Triage + all sub_age
 # ── Session service ───────────────────────────────────────────────────────────
 # Use VertexAiSessionService when TRIAGE_ENGINE_ID is configured (GCP / production).
 # Falls back to InMemorySessionService for local development without GCP credentials.
-# TRIAGE_ENGINE_ID acepta también AGENT_ENGINE_ID como alias de backward-compat.
+# TRIAGE_ENGINE_ID also accepts AGENT_ENGINE_ID as a backward-compat alias.
 
 if config.TRIAGE_ENGINE_ID and config.GOOGLE_CLOUD_PROJECT:
     from google.adk.sessions import VertexAiSessionService

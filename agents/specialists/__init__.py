@@ -1,3 +1,3 @@
-# Directorio de plugins de agentes especialistas.
-# Cada módulo aquí debe exportar PLUGIN: AgentPlugin
-# AgentLoader escanea este paquete automáticamente en startup.
+# Specialist agent plugin directory.
+# Each module here must export PLUGIN: AgentPlugin
+# AgentLoader scans this package automatically at startup.

@@ -1,37 +1,37 @@
 """
-provision.py — Gestiona el sistema multi-agente en Vertex AI Agent Engine.
+provision.py — Manages the multi-agent system on Vertex AI Agent Engine.
 
-Despliega el árbol completo (Triage + todos los especialistas) como un único
-Vertex AI Reasoning Engine resource siguiendo el patrón ADK estándar.
+Deploys the full agent tree (Triage + all specialists) as a single
+Vertex AI Reasoning Engine resource following the standard ADK pattern.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-COMANDOS (ejecutar desde backend/):
+COMMANDS (run from the repo root):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  # Deploy del sistema si no existe
+  # Deploy the system if it does not exist
   python -m orchestrator.provision
 
-  # Forzar redeploy (actualiza instrucciones, tools o modelo)
+  # Force redeploy (updates instructions, tools or model)
   python -m orchestrator.provision --force
 
-  # Ver estado actual en Vertex AI
+  # Show current state in Vertex AI
   python -m orchestrator.provision --list
 
-  # Eliminar el recurso del sistema
+  # Delete the system resource
   python -m orchestrator.provision --delete
 
-  # Limpiar recursos huérfanos de la tentativa anterior (stayforlong-agent-*)
+  # Remove orphan resources from a previous attempt (stayforlong-agent-*)
   python -m orchestrator.provision --purge-orphans
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PREREQUISITOS:
+PREREQUISITES:
   GOOGLE_CLOUD_PROJECT=...
-  VERTEX_STAGING_BUCKET=gs://tu-bucket
+  VERTEX_STAGING_BUCKET=gs://your-bucket
   GOOGLE_GENAI_USE_VERTEXAI=true
 
-STARTUP AUTOMÁTICO (main.py):
-  Llamado en background al arrancar — crea el recurso si no existe.
-  Si ya está desplegado, termina en ~2s sin hacer nada.
+AUTO-STARTUP (main.py):
+  Called in the background on server start — creates the resource if it does not exist.
+  If already deployed, completes in ~2s with no action.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 import argparse
@@ -47,25 +47,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Guard de configuración ─────────────────────────────────────────────────────
+# ── Config guard ──────────────────────────────────────────────────────────
 
 def _check_config(need_bucket: bool = True) -> bool:
     if not config.GOOGLE_CLOUD_PROJECT:
-        logger.warning("GOOGLE_CLOUD_PROJECT no configurado — saltando aprovisionamiento.")
+        logger.warning("GOOGLE_CLOUD_PROJECT not set — skipping provisioning.")
         return False
     if need_bucket and not config.VERTEX_STAGING_BUCKET:
         logger.warning(
-            "VERTEX_STAGING_BUCKET no configurado — saltando aprovisionamiento. "
-            "Establece VERTEX_STAGING_BUCKET=gs://tu-bucket en .env."
+            "VERTEX_STAGING_BUCKET not set — skipping provisioning. "
+            "Set VERTEX_STAGING_BUCKET=gs://your-bucket in .env."
         )
         return False
     return True
 
 
-# ── Comandos ───────────────────────────────────────────────────────────────────
+# ── Commands ───────────────────────────────────────────────────────────────
 
 def cmd_list() -> None:
-    """Muestra el estado actual del sistema en Vertex AI."""
+    """Show current state of the system in Vertex AI."""
     if not _check_config(need_bucket=False):
         return
 
@@ -77,80 +77,78 @@ def cmd_list() -> None:
     print("=" * 70)
 
     if system:
-        print(f"\n  ✅ SISTEMA ACTIVO")
-        print(f"     Nombre:   {system.display_name}")
+        print(f"\n  ✅ SYSTEM ACTIVE")
+        print(f"     Name:     {system.display_name}")
         print(f"     ID:       {system.numeric_id}")
         print(f"     Resource: {system.resource_name}")
-        print(f"\n  Agentes en el árbol:")
-        # Importar root_agent para listar sub_agents
+        print(f"\n  Agents in the tree:")
         try:
             from agent import root_agent
-            print(f"     • {root_agent.name} (router principal)")
+            print(f"     • {root_agent.name} (main router)")
             for sub in getattr(root_agent, 'sub_agents', []):
                 print(f"       └─ {sub.name}")
         except Exception:
-            print("     (no se pudo leer el árbol de agentes locales)")
+            print("     (could not read local agent tree)")
     else:
-        print(f"\n  ❌ Sistema '{system or 'stayforlong-multiagent'}' NO desplegado")
+        print(f"\n  ❌ System '{system or 'stayforlong-multiagent'}' NOT deployed")
 
     orphans = [r for r in all_resources if r.display_name.startswith("stayforlong-agent-")]
     if orphans:
-        print(f"\n  ⚠️  Recursos huérfanos detectados ({len(orphans)}):")
+        print(f"\n  ⚠️  Orphan resources detected ({len(orphans)}):")
         for o in orphans:
-            print(f"     • {o.display_name} ({o.numeric_id}) — ejecuta --purge-orphans para eliminarlos")
+            print(f"     • {o.display_name} ({o.numeric_id}) — run --purge-orphans to delete them")
 
     print()
     if system:
         print(f"  Vertex AI console:")
         print(f"  https://console.cloud.google.com/vertex-ai/agents?project={config.GOOGLE_CLOUD_PROJECT}")
-        print(f"\n  Cloud Trace (trazas por agente):")
+        print(f"\n  Cloud Trace (per-agent traces):")
         print(f"  https://console.cloud.google.com/traces/list?project={config.GOOGLE_CLOUD_PROJECT}")
     print()
 
 
 def cmd_purge_orphans() -> None:
-    """Elimina recursos huérfanos con prefijo stayforlong-agent-."""
+    """Delete orphan resources with prefix stayforlong-agent-."""
     if not _check_config(need_bucket=False):
         return
 
     registry = VertexRegistry()
-    print("\nEliminando recursos huérfanos (stayforlong-agent-*)...")
+    print("\nDeleting orphan resources (stayforlong-agent-*)...")
     deleted = registry.purge_orphans()
     if deleted:
-        print(f"\n✅ {len(deleted)} recurso(s) eliminado(s):")
+        print(f"\n✅ {len(deleted)} resource(s) deleted:")
         for rn in deleted:
             print(f"   {rn}")
     else:
-        print("\n✅ No se encontraron recursos huérfanos.")
+        print("\n✅ No orphan resources found.")
     print()
 
 
 def cmd_delete() -> None:
-    """Elimina el recurso del sistema de Vertex AI."""
+    """Delete the system resource from Vertex AI."""
     if not _check_config(need_bucket=False):
         return
 
     registry = VertexRegistry()
     deleted = registry.delete_system()
     if deleted:
-        print("\n✅ Sistema eliminado de Vertex AI.")
-        print("   Recuerda borrar o comentar AGENT_ENGINE_ID en .env si vas a usar InMemory.\n")
+        print("\n✅ System deleted from Vertex AI.")
+        print("   Remember to clear or comment out AGENT_ENGINE_ID in .env if switching to InMemory.\n")
     else:
-        print("\n⚠️  Sistema no encontrado en Vertex AI.\n")
+        print("\n⚠️  System not found in Vertex AI.\n")
 
 
 def run_provision(force: bool = False) -> None:
     """
-    Flujo principal de aprovisionamiento (usado desde startup de la app y CLI).
+    Main provisioning flow (called from app startup and CLI).
 
     Args:
-        force: Si True, redespliega aunque ya exista (--force).
-               Si False (defecto), sólo despliega si no existe.
+        force: If True, redeploys even if the system already exists (--force).
+               If False (default), only deploys if the system does not exist.
     """
     if not _check_config():
         return
 
-    # Importar root_agent desde el entrypoint estándar ADK
     from agent import root_agent
 
     registry = VertexRegistry()
@@ -159,14 +157,14 @@ def run_provision(force: bool = False) -> None:
         existing = registry.get_system()
         if existing:
             logger.info(
-                "Sistema '%s' ya desplegado (%s) — nada que hacer.",
+                "System '%s' already deployed (%s) — nothing to do.",
                 existing.display_name,
                 existing.numeric_id,
             )
             return
 
-    action = "Actualizando" if force else "Desplegando"
-    logger.info("%s sistema multi-agente en Vertex AI...", action)
+    action = "Updating" if force else "Deploying"
+    logger.info("%s multi-agent system on Vertex AI...", action)
 
     try:
         if force:
@@ -174,23 +172,23 @@ def run_provision(force: bool = False) -> None:
         else:
             resource = registry.deploy_system(root_agent, config.VERTEX_STAGING_BUCKET)
     except Exception:
-        logger.exception("Error al desplegar el sistema en Vertex AI")
+        logger.exception("Error deploying system to Vertex AI")
         return
 
     _print_summary(resource)
 
 
 def _print_summary(resource) -> None:
-    print("\nVertex AI Agent Engine — Sistema desplegado")
+    print("\nVertex AI Agent Engine — System deployed")
     print("=" * 70)
     print(f"  ✅ {resource.display_name}")
     print(f"     ID:       {resource.numeric_id}")
     print(f"     Resource: {resource.resource_name}")
-    print(f"\n  Actualiza tu .env con:")
+    print(f"\n  Update your .env with:")
     print(f"     AGENT_ENGINE_ID={resource.numeric_id}")
     print(f"\n  Vertex AI console:")
     print(f"  https://console.cloud.google.com/vertex-ai/agents?project={config.GOOGLE_CLOUD_PROJECT}")
-    print(f"\n  Cloud Trace (trazas por agente):")
+    print(f"\n  Cloud Trace (per-agent traces):")
     print(f"  https://console.cloud.google.com/traces/list?project={config.GOOGLE_CLOUD_PROJECT}")
     print()
 
@@ -199,15 +197,15 @@ def _print_summary(resource) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Gestiona el sistema multi-agente Stayforlong en Vertex AI Agent Engine.",
+        description="Manage the Stayforlong multi-agent system on Vertex AI Agent Engine.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Ejemplos:\n"
-            "  python -m orchestrator.provision                  # deploy si no existe\n"
-            "  python -m orchestrator.provision --force          # redeploy completo\n"
-            "  python -m orchestrator.provision --list           # ver estado actual\n"
-            "  python -m orchestrator.provision --delete         # eliminar recurso\n"
-            "  python -m orchestrator.provision --purge-orphans  # limpiar tentativa anterior\n"
+            "Examples:\n"
+            "  python -m orchestrator.provision                  # deploy if not exists\n"
+            "  python -m orchestrator.provision --force          # full redeploy\n"
+            "  python -m orchestrator.provision --list           # show current state\n"
+            "  python -m orchestrator.provision --delete         # delete resource\n"
+            "  python -m orchestrator.provision --purge-orphans  # clean up previous attempt\n"
         ),
     )
 
@@ -215,22 +213,22 @@ def main() -> None:
     group.add_argument(
         "--list", "-l",
         action="store_true",
-        help="Muestra el estado actual del sistema en Vertex AI.",
+        help="Show current state of the system in Vertex AI.",
     )
     group.add_argument(
         "--force", "-f",
         action="store_true",
-        help="Redespliega el sistema completo (actualiza instrucciones/tools/modelo).",
+        help="Redeploy the full system (updates instructions/tools/model).",
     )
     group.add_argument(
         "--delete", "-d",
         action="store_true",
-        help="Elimina el recurso del sistema de Vertex AI.",
+        help="Delete the system resource from Vertex AI.",
     )
     group.add_argument(
         "--purge-orphans",
         action="store_true",
-        help="Elimina recursos huérfanos (stayforlong-agent-*) de tentativas anteriores.",
+        help="Delete orphan resources (stayforlong-agent-*) from previous attempts.",
     )
 
     args = parser.parse_args()

@@ -143,6 +143,6 @@ PLUGIN = AgentPlugin(
         "• You are the last resort: always resolve or provide contact info, never leave the guest without an answer."
     ),
     model=config.GEMINI_MODEL,
-    is_fallback=True,  # HelpCenter es el fallback de último recurso
+    is_fallback=True,  # HelpCenter is the last-resort fallback agent
     get_tools=lambda: [query_help_center, transfer_to_triage],
 )

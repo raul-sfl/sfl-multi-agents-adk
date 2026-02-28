@@ -1,11 +1,11 @@
 """
-Triage agent — enrutador principal del asistente Stayforlong.
+Triage agent — main router for the Stayforlong assistant.
 
-build_triage_agent() es una factory que recibe los agentes especialistas
-descubiertos dinámicamente por AgentLoader y construye el LlmAgent de Triage
-con sus sub_agents y la instrucción de routing correcta.
+build_triage_agent() is a factory that receives specialist agents
+dynamically discovered by AgentLoader and builds the Triage LlmAgent
+with its sub_agents and the correct routing instruction.
 
-Llamado desde adk_runner.py:
+Called from adk_runner.py:
     loader = AgentLoader()
     specialists, fallback = loader.build_agents()
     triage_agent = build_triage_agent(specialists, fallback)
@@ -20,15 +20,15 @@ def build_triage_agent(
     fallback: tuple[AgentPlugin, LlmAgent],
 ) -> LlmAgent:
     """
-    Construye el agente Triage con sub_agents descubiertos dinámicamente.
+    Build the Triage agent with dynamically discovered sub_agents.
 
     Args:
-        specialists: Lista de (AgentPlugin, LlmAgent) para agentes no-fallback.
-                     El orden determina la prioridad en la instrucción de routing.
-        fallback:    (AgentPlugin, LlmAgent) del agente de último recurso.
+        specialists: List of (AgentPlugin, LlmAgent) for non-fallback agents.
+                     Order determines routing priority in the instruction.
+        fallback:    (AgentPlugin, LlmAgent) for the last-resort fallback agent.
 
     Returns:
-        LlmAgent configurado con sub_agents y routing instruction completa.
+        LlmAgent configured with sub_agents and the full routing instruction.
     """
     fallback_plugin, fallback_agent = fallback
 
