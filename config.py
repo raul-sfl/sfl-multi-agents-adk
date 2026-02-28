@@ -1,4 +1,6 @@
 import os
+import json
+import tempfile
 
 # In Vertex AI Agent Engine runtime, _vertex_env.py is bundled via extra_packages
 # and pre-sets os.environ with project/location/model values. Safe no-op locally.
@@ -10,6 +12,27 @@ except ImportError:
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Railway / Cloud Run: GCP service account from env var ─────────────────────
+# Set GOOGLE_APPLICATION_CREDENTIALS_JSON to the full contents of your
+# service account JSON key (copy-paste the entire JSON as a single env var).
+# This writes it to a temp file and sets GOOGLE_APPLICATION_CREDENTIALS so
+# Google client libraries pick it up automatically.
+_sa_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip()
+if _sa_json and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    try:
+        _sa_data = json.loads(_sa_json)
+        _sa_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, prefix="gcp_sa_"
+        )
+        json.dump(_sa_data, _sa_file)
+        _sa_file.close()
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _sa_file.name
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Failed to write GOOGLE_APPLICATION_CREDENTIALS_JSON to temp file: %s", _e
+        )
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
