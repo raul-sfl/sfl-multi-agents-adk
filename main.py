@@ -1,16 +1,11 @@
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from ws.handler import websocket_endpoint
 from admin.router import router as admin_router
 import config  # Must be imported first to set env vars before ADK initializes
-
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +24,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -83,7 +78,5 @@ async def health():
 
 
 @app.get("/")
-async def serve_demo():
-    return FileResponse(str(FRONTEND_DIR / "demo.html"))
-
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+async def root():
+    return {"status": "ok", "service": "sfl-multi-agents-adk"}

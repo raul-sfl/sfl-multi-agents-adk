@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc ls-files)",
+      "Bash(git -C /Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc config core.sparseCheckout)",
+      "Bash(git -C /Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc status --short)",
+      "Bash(python -c \":*)",
+      "Bash(python3 -c \":*)",
+      "Bash(/Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc/backend/.env.example:*)",
+      "Bash(git -C /Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc stash list)",
+      "Bash(git -C /Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc show adk-vertex-ai:backend/.env.example)",
+      "Bash(git -C /Users/raul/Documents/AgentsTest/multi-agents/stayforlong-poc show adk-vertex-ai:backend/config.py)",
+      "Bash(ls *.py)",
+      "Bash(python3 -m orchestrator.provision --purge-orphans)",
+      "Bash(python3 -m orchestrator.provision --list)",
+      "Bash(python3 -u -m orchestrator.provision)",
+      "Bash(tee /tmp/sfl_deploy.log)",
+      "Bash(python3 -m orchestrator.provision)"
+    ]
+  }
+}

@@ -88,3 +88,13 @@ HISTORY_RECOVERY_HOURS = int(os.environ.get("HISTORY_RECOVERY_HOURS", "48"))
 # Protect the /admin dashboard with a secret key.
 # If empty, the dashboard is open (dev mode only — set a key in production!).
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# Comma-separated list of allowed origins.
+# ADMIN_ORIGIN: URL where sfl-multi-agents-admin is hosted.
+# FRONTEND_ORIGIN: URL where sfl-multi-agents-chat widget/demo is hosted.
+# Defaults to ["*"] when neither is set (local dev).
+_admin_origin = os.environ.get("ADMIN_ORIGIN", "")
+_frontend_origin = os.environ.get("FRONTEND_ORIGIN", "")
+_explicit_origins = [o.strip() for o in [_admin_origin, _frontend_origin] if o.strip()]
+CORS_ORIGINS: list[str] = _explicit_origins if _explicit_origins else ["*"]
