@@ -401,9 +401,10 @@ class ConversationLogger:
             from google.cloud import logging as cloud_logging  # noqa: PLC0415
             import asyncio
 
-            today_iso = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ).isoformat()
+            now = datetime.now(timezone.utc)
+            today_iso = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            # "Active now" = started within last 2 h and not yet closed
+            active_cutoff_iso = (now - timedelta(hours=2)).isoformat()
             base = f'logName="{_log_name()}"'
 
             def _count(extra: str) -> int:
@@ -420,23 +421,45 @@ class ConversationLogger:
                     if e.labels.get("user_id")
                 })
 
-            def _count_closed() -> int:
-                return sum(1 for _ in cl_client.list_entries(
-                    filter_=f'{base} AND jsonPayload.event_type="conversation_end"',
-                    page_size=500,
-                ))
+            def _active_conversations() -> int:
+                # Conversations started in the last 2 h with no conversation_end
+                recent_ids = {
+                    e.labels.get("conversation_id")
+                    for e in cl_client.list_entries(
+                        filter_=(
+                            f'{base} AND jsonPayload.event_type="conversation_start"'
+                            f' AND timestamp >= "{active_cutoff_iso}"'
+                        ),
+                        page_size=200,
+                    )
+                    if e.labels.get("conversation_id")
+                }
+                if not recent_ids:
+                    return 0
+                closed_ids = {
+                    e.labels.get("conversation_id")
+                    for e in cl_client.list_entries(
+                        filter_=(
+                            f'{base} AND jsonPayload.event_type="conversation_end"'
+                            f' AND timestamp >= "{active_cutoff_iso}"'
+                        ),
+                        page_size=200,
+                    )
+                    if e.labels.get("conversation_id")
+                }
+                return len(recent_ids - closed_ids)
 
-            total, today_count, closed_count, unique_users = await asyncio.gather(
+            total, today_count, unique_users, active_count = await asyncio.gather(
                 asyncio.to_thread(_count, 'jsonPayload.event_type="conversation_start"'),
                 asyncio.to_thread(_count, f'jsonPayload.event_type="conversation_start" AND timestamp >= "{today_iso}"'),
-                asyncio.to_thread(_count_closed),
                 asyncio.to_thread(_unique_users),
+                asyncio.to_thread(_active_conversations),
             )
 
             return {
                 "total_conversations":  total,
                 "conversations_today":  today_count,
-                "active_conversations": max(total - closed_count, 0),
+                "active_conversations": active_count,
                 "total_users":          unique_users,
             }
         except Exception as exc:
