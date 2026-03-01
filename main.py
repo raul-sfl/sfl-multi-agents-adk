@@ -7,6 +7,26 @@ from ws.handler import websocket_endpoint
 from admin.router import router as admin_router
 import config  # Must be imported first to set env vars before ADK initializes
 
+# ── OpenTelemetry / Cloud Trace instrumentation ───────────────────────────────
+# Only enabled when running on Vertex AI (requires GCP credentials).
+if config.USE_VERTEX_AI and config.GOOGLE_CLOUD_PROJECT:
+    try:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+        from opentelemetry.instrumentation.adk import ADKInstrumentor
+
+        _tracer_provider = TracerProvider()
+        _tracer_provider.add_span_processor(
+            BatchSpanProcessor(CloudTraceSpanExporter())
+        )
+        ADKInstrumentor().instrument(tracer_provider=_tracer_provider)
+    except Exception as _otel_err:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "OpenTelemetry instrumentation not available: %s", _otel_err
+        )
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

@@ -91,6 +91,9 @@ VERTEX_AGENT_REQUIREMENTS = [
     "google-adk",
     "google-cloud-discoveryengine",
     "google-cloud-logging>=3.0.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-gcp-trace>=1.6.0",
+    "opentelemetry-instrumentation-adk",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
 ]
