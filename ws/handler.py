@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
+from google import genai
 from google.genai import types as genai_types
 from fastapi import WebSocket, WebSocketDisconnect
 from orchestrator.adk_runner import get_runner, session_service
@@ -70,6 +71,62 @@ WELCOME_MESSAGES = {
         "En què et puc ajudar avui?"
     ),
 }
+
+CONTINUATION_FALLBACK = {
+    "es": "¡Bienvenido de nuevo! Veo que ya hemos hablado antes. ¿En qué puedo ayudarte hoy?",
+    "en": "Welcome back! I can see we've spoken before. How can I help you today?",
+    "pt": "Bem-vindo de volta! Vejo que já falámos antes. Como posso ajudá-lo hoje?",
+    "fr": "Bon retour ! Je vois que nous avons déjà parlé. Comment puis-je vous aider aujourd'hui ?",
+    "de": "Willkommen zurück! Ich sehe, dass wir schon gesprochen haben. Wie kann ich Ihnen heute helfen?",
+    "it": "Bentornato! Vedo che abbiamo già parlato. Come posso aiutarti oggi?",
+    "ca": "Benvingut de nou! Veig que ja hem parlat abans. En què et puc ajudar avui?",
+}
+
+_genai_client: genai.Client | None = None
+
+
+def _get_genai_client() -> genai.Client:
+    global _genai_client
+    if _genai_client is None:
+        _genai_client = genai.Client()
+    return _genai_client
+
+
+async def _build_continuation_greeting(history: list[dict], lang: str, lang_name: str) -> str:
+    """Use the LLM to generate a context-aware greeting based on prior conversation."""
+    # Use last 6 messages max to keep the prompt small
+    recent = history[-6:]
+    summary_lines = []
+    for m in recent:
+        role_label = "User" if m["role"] == "user" else "Assistant"
+        summary_lines.append(f"{role_label}: {m['content'][:200]}")
+    conversation_excerpt = "\n".join(summary_lines)
+
+    prompt = (
+        f"You are the Stayforlong virtual assistant. A returning user has reconnected. "
+        f"Below is the end of their previous conversation.\n\n"
+        f"{conversation_excerpt}\n\n"
+        f"Write a SHORT (1-2 sentences) welcome-back greeting in {lang_name} that "
+        f"naturally acknowledges the context of the previous conversation and invites "
+        f"the user to continue or ask anything new. "
+        f"Do NOT list your capabilities. Be warm and conversational."
+    )
+
+    try:
+        client = _get_genai_client()
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=config.GEMINI_MODEL,
+            contents=prompt,
+        )
+        text = response.text.strip() if response.text else ""
+        if text:
+            return text
+    except Exception as exc:
+        logger.warning("Continuation greeting generation failed: %s", exc)
+
+    return CONTINUATION_FALLBACK.get(lang, CONTINUATION_FALLBACK["en"])
+
 
 LANG_NAMES = {
     "es": "Spanish", "en": "English", "pt": "Portuguese",
@@ -230,7 +287,10 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     })
 
     # ── Welcome message ───────────────────────────────────────────────────────
-    welcome_text = WELCOME_MESSAGES[supported_lang]
+    if history_messages:
+        welcome_text = await _build_continuation_greeting(history_messages, supported_lang, lang_name)
+    else:
+        welcome_text = WELCOME_MESSAGES[supported_lang]
     await websocket.send_json({
         "type":    "message",
         "content": welcome_text,
