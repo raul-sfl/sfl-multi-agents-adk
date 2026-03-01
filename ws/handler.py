@@ -1,10 +1,11 @@
+import re
 import uuid
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from google.genai import types as genai_types
 from fastapi import WebSocket, WebSocketDisconnect
-from orchestrator.adk_runner import runner, session_service
+from orchestrator.adk_runner import get_runner, session_service
 from services.conversation_logger import conversation_logger
 
 import config
@@ -74,6 +75,26 @@ LANG_NAMES = {
     "es": "Spanish", "en": "English", "pt": "Portuguese",
     "fr": "French", "de": "German", "it": "Italian", "ca": "Catalan",
 }
+
+_GREETING_RE = re.compile(
+    r"^\s*("
+    r"hola|hello|hi|hey|hei|salut|bonjour|ciao|ola|ol[aá]|buenos\s+d[íi]as|"
+    r"buenas\s+tardes|buenas\s+noches|buen\s+d[íi]a|good\s+morning|"
+    r"good\s+afternoon|good\s+evening|good\s+day|guten\s+tag|guten\s+morgen|"
+    r"guten\s+abend|buongiorno|buonasera|bon\s+matin|bonsoir|"
+    r"ola|ol[aá]|bom\s+dia|boa\s+tarde|boa\s+noite|"
+    r"howdy|sup|what'?s\s+up|greetings"
+    r")[!.,\s]*$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _is_greeting(text: str) -> bool:
+    """Return True if the message is nothing more than a simple greeting."""
+    words = text.split()
+    if len(words) > 6:
+        return False
+    return bool(_GREETING_RE.match(text.strip()))
 
 
 async def _get_history(user_id: str) -> list[dict]:
@@ -171,24 +192,38 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     # ── History recovery from VertexAiSessionService ──────────────────────────
     history_messages = await _get_history(user_id)
 
-    # ── ADK session — keyed by real user_id for cross-session continuity ──────
-    adk_session = await session_service.create_session(
-        app_name="stayforlong",
-        user_id=user_id,
-        state={"lang": supported_lang, "lang_name": lang_name},
-    )
-    session_id = adk_session.id
+    # ── Lazy state — session & conv created on first substantive message ──────
+    session_id: str | None = None
+    conv_id:    str | None = None
 
-    # ── Conversation audit log ────────────────────────────────────────────────
-    conv_id = str(uuid.uuid4())
-    await conversation_logger.log_conversation_start(
-        conv_id, user_id, session_id, supported_lang
-    )
+    async def _ensure_session():
+        """Create ADK session + open Cloud Logging conv the first time needed."""
+        nonlocal session_id, conv_id
+        if session_id is not None:
+            return
+        adk_session = await session_service.create_session(
+            app_name="stayforlong",
+            user_id=user_id,
+            state={"lang": supported_lang, "lang_name": lang_name},
+        )
+        session_id = adk_session.id
+        conv_id = str(uuid.uuid4())
+        await conversation_logger.log_conversation_start(
+            conv_id, user_id, session_id, supported_lang
+        )
+        # Notify client of the real session_id now that it exists
+        await websocket.send_json({
+            "type":       "session_init",
+            "session_id": session_id,
+            "user_id":    user_id,
+            "lang":       supported_lang,
+            "history":    [],
+        })
 
-    # ── Send session_init (with optional history) ─────────────────────────────
+    # ── Send session_init (with history) before welcome — session_id TBD ─────
     await websocket.send_json({
         "type":       "session_init",
-        "session_id": session_id,
+        "session_id": None,
         "user_id":    user_id,
         "lang":       supported_lang,
         "history":    history_messages,
@@ -201,9 +236,7 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
         "content": welcome_text,
         "agent":   "Stayforlong Assistant",
     })
-    await conversation_logger.log_message(
-        conv_id, "assistant", welcome_text, "Stayforlong Assistant"
-    )
+    # Welcome is logged after the session is materialised (see message loop)
 
     # ── Main message loop ─────────────────────────────────────────────────────
     try:
@@ -212,6 +245,24 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
             user_message = data.get("message", "").strip()
             if not user_message:
                 continue
+
+            # ── Greeting gate: don't create a session for trivial openers ─────
+            if session_id is None and _is_greeting(user_message):
+                await websocket.send_json({
+                    "type":    "message",
+                    "content": welcome_text,
+                    "agent":   "Stayforlong Assistant",
+                })
+                continue
+
+            # ── Materialise session + conv on first substantive message ───────
+            first_message = session_id is None
+            await _ensure_session()
+
+            if first_message:
+                await conversation_logger.log_message(
+                    conv_id, "assistant", welcome_text, "Stayforlong Assistant"
+                )
 
             await conversation_logger.log_message(conv_id, "user", user_message)
             await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
@@ -225,7 +276,7 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
                 reply_text = ""
                 reply_agent = "Stayforlong"
 
-                async for event in runner.run_async(
+                async for event in get_runner().run_async(
                     user_id=user_id,
                     session_id=session_id,
                     new_message=content,
@@ -263,9 +314,11 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     except WebSocketDisconnect:
         logger.info("Session %s (user %s) disconnected.", session_id, user_id)
         # Session kept in Vertex AI for history recovery on next connect
-        await conversation_logger.log_conversation_end(conv_id)
+        if conv_id:
+            await conversation_logger.log_conversation_end(conv_id)
     except Exception as e:
         logger.error("WebSocket error: %s", e, exc_info=True)
-        await conversation_logger.log_conversation_end(conv_id)
+        if conv_id:
+            await conversation_logger.log_conversation_end(conv_id)
     finally:
         _ping_task.cancel()

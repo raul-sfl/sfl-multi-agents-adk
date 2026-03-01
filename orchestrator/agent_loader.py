@@ -99,6 +99,82 @@ class AgentLoader:
             except Exception:
                 logger.exception("Error loading plugin %s", full_name)
 
+    def build_agents_merged(
+        self,
+    ) -> tuple[list[tuple[AgentPlugin, LlmAgent]], tuple[AgentPlugin, LlmAgent]]:
+        """
+        Build agents merging Python source definitions with GCS-stored configs.
+
+        Resolution order:
+        1. Python source agents are loaded as the base.
+        2. GCS entries with the same name override instruction/routing_hint/model/tools.
+        3. GCS entries with new names are appended as additional agents.
+
+        Returns:
+            (specialists, fallback) same shape as build_agents().
+        """
+        from services.agent_gcs_store import load_all
+        from agents.tool_registry import get_tools_for
+
+        self._ensure_loaded()
+        gcs_configs = load_all()
+
+        specialists: list[tuple[AgentPlugin, LlmAgent]] = []
+        fallback: tuple[AgentPlugin, LlmAgent] | None = None
+        processed_names: set[str] = set()
+
+        # Python source agents — apply GCS overrides where present
+        for plugin in self._plugins:
+            processed_names.add(plugin.name)
+            override = gcs_configs.get(plugin.name, {})
+
+            instruction = override.get("instruction", plugin.instruction)
+            routing_hint = override.get("routing_hint", plugin.routing_hint)
+            model = override.get("model", plugin.model)
+            is_fallback = override.get("is_fallback", plugin.is_fallback)
+
+            if "tools" in override:
+                tools = get_tools_for(override["tools"])
+            else:
+                tools = plugin.get_tools()
+
+            agent = LlmAgent(
+                name=plugin.name,
+                model=model,
+                instruction=instruction,
+                tools=tools,
+            )
+            if is_fallback:
+                fallback = (plugin, agent)
+            else:
+                specialists.append((plugin, agent))
+
+        # GCS-only agents (names not present in Python source files)
+        for name, cfg in gcs_configs.items():
+            if name in processed_names:
+                continue
+            tools = get_tools_for(cfg.get("tools", ["transfer_to_triage"]))
+            synthetic_plugin = AgentPlugin(
+                name=cfg["name"],
+                routing_hint=cfg.get("routing_hint", ""),
+                instruction=cfg.get("instruction", ""),
+                model=cfg.get("model", "gemini-2.5-flash"),
+                is_fallback=cfg.get("is_fallback", False),
+                get_tools=lambda t=tools: t,
+            )
+            agent = LlmAgent(
+                name=synthetic_plugin.name,
+                model=synthetic_plugin.model,
+                instruction=synthetic_plugin.instruction,
+                tools=tools,
+            )
+            if synthetic_plugin.is_fallback:
+                fallback = (synthetic_plugin, agent)
+            else:
+                specialists.append((synthetic_plugin, agent))
+
+        return specialists, fallback  # type: ignore[return-value]
+
     def _validate(self) -> None:
         fallbacks = [p for p in self._plugins if p.is_fallback]
         if len(fallbacks) != 1:

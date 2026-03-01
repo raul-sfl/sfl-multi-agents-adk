@@ -18,8 +18,8 @@ from orchestrator.agent_loader import AgentLoader
 from agents.triage import build_triage_agent
 
 _loader = AgentLoader()
-_specialists, _fallback = _loader.build_agents()
+_specialists, _fallback = _loader.build_agents_merged()
 
-# root_agent: full tree Triage → [Booking, Support, Property, HelpCenter]
+# root_agent: full tree Triage → [Booking, Support, Property, HelpCenter] + any GCS agents
 # ADK uses this variable to discover the multi-agent system.
 root_agent = build_triage_agent(_specialists, _fallback)

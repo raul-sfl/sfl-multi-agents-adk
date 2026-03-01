@@ -1,7 +1,11 @@
 import logging as _logging
+import threading
 import config  # Must be imported first to set env vars before ADK initializes
 from google.adk.runners import Runner
 from agent import root_agent  # Standard ADK entrypoint — Triage + all sub_agents
+
+_logger = _logging.getLogger(__name__)
+_lock = threading.Lock()
 
 # ── Session service ───────────────────────────────────────────────────────────
 # Use VertexAiSessionService when TRIAGE_ENGINE_ID is configured (GCP / production).
@@ -16,7 +20,7 @@ if config.TRIAGE_ENGINE_ID and config.GOOGLE_CLOUD_PROJECT:
         location=config.AGENT_ENGINE_LOCATION,
         agent_engine_id=config.TRIAGE_ENGINE_ID,
     )
-    _logging.getLogger(__name__).info(
+    _logger.info(
         "Using VertexAiSessionService (project=%s, engine=%s)",
         config.GOOGLE_CLOUD_PROJECT,
         config.TRIAGE_ENGINE_ID,
@@ -25,15 +29,48 @@ else:
     from google.adk.sessions import InMemorySessionService
 
     session_service = InMemorySessionService()
-    _logging.getLogger(__name__).warning(
+    _logger.warning(
         "TRIAGE_ENGINE_ID not set — using InMemorySessionService (sessions lost on restart)."
     )
 
 # ── Runner ────────────────────────────────────────────────────────────────────
-# app_name is scoped per Agent Engine resource via agent_engine_id in the
-# session service constructor, so any string works here.
-runner = Runner(
+# _runner is a module-level variable that can be replaced by rebuild_runner().
+# Use get_runner() for late binding — never import `runner` directly.
+
+_runner: Runner = Runner(
     agent=root_agent,
     app_name="stayforlong",
     session_service=session_service,
 )
+
+
+def get_runner() -> Runner:
+    """Late-binding accessor. Always returns the current runner instance."""
+    return _runner
+
+
+def rebuild_runner() -> None:
+    """
+    Rebuild the runner with the current merged agent tree (Python source + GCS store).
+
+    Called automatically after any admin create/update/delete operation.
+    New WebSocket sessions created after this call will use the updated agents.
+    Existing in-flight sessions are not affected.
+    """
+    global _runner
+    from orchestrator.agent_loader import AgentLoader
+    from agents.triage import build_triage_agent
+
+    loader = AgentLoader()
+    specialists, fallback = loader.build_agents_merged()
+    new_root = build_triage_agent(specialists, fallback)
+
+    new_runner = Runner(
+        agent=new_root,
+        app_name="stayforlong",
+        session_service=session_service,
+    )
+    with _lock:
+        _runner = new_runner
+
+    _logger.info("Runner rebuilt with updated agent tree.")
