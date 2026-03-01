@@ -155,7 +155,7 @@ def get_checkin_info(property_id: str) -> str:
 _contact = STAYFORLONG_CONTACT
 
 PLUGIN = AgentPlugin(
-    name="Alojamientos",
+    name="Accommodations",
     routing_hint="Accommodation info, amenities, check-in/out times, facilities",
     instruction=(
         "You are the accommodation specialist for Stayforlong, a long-stay apartment platform. "
