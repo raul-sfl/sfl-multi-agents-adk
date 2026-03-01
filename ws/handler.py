@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from google.genai import types as genai_types
@@ -144,6 +145,22 @@ async def _get_history(user_id: str) -> list[dict]:
 async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: str = ""):
     await websocket.accept()
 
+    # Send an immediate ping so Railway's reverse-proxy doesn't close the
+    # connection while we make the initial Vertex AI calls (history + session).
+    await websocket.send_json({"type": "ping"})
+
+    # Keepalive task: ping every 20 s to prevent Railway's idle timeout from
+    # dropping long-lived connections with no user traffic.
+    async def _keepalive():
+        while True:
+            await asyncio.sleep(20)
+            try:
+                await websocket.send_json({"type": "ping"})
+            except Exception:
+                break
+
+    _ping_task = asyncio.create_task(_keepalive())
+
     supported_lang = lang if lang in WELCOME_MESSAGES else "en"
     lang_name = LANG_NAMES.get(supported_lang, "English")
 
@@ -250,3 +267,5 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     except Exception as e:
         logger.error("WebSocket error: %s", e, exc_info=True)
         await conversation_logger.log_conversation_end(conv_id)
+    finally:
+        _ping_task.cancel()
