@@ -1,6 +1,7 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 google-adk
+google-genai
 google-cloud-discoveryengine
 google-cloud-logging>=3.0.0
 google-cloud-storage>=2.0.0

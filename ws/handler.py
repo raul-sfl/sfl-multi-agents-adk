@@ -88,7 +88,14 @@ _genai_client: genai.Client | None = None
 def _get_genai_client() -> genai.Client:
     global _genai_client
     if _genai_client is None:
-        _genai_client = genai.Client()
+        if config.USE_VERTEX_AI and config.GOOGLE_CLOUD_PROJECT:
+            _genai_client = genai.Client(
+                vertexai=True,
+                project=config.GOOGLE_CLOUD_PROJECT,
+                location=config.GOOGLE_CLOUD_LOCATION,
+            )
+        else:
+            _genai_client = genai.Client()
     return _genai_client
 
 
