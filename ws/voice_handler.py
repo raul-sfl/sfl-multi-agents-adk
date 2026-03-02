@@ -50,8 +50,10 @@ _LANG_NAMES: dict[str, str] = {
     "de": "German",  "it": "Italian", "pt": "Portuguese", "ca": "Catalan",
 }
 
-# ── Sentence splitter ─────────────────────────────────────────────────────────
+# ── Sentence / clause splitter ───────────────────────────────────────────────
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
+_CLAUSE_END   = re.compile(r'(?<=[,;])\s+')
+_MIN_CLAUSE_CHARS = 60  # only split on clause boundary when chunk is at least this long
 
 # ── Markdown stripper (for TTS) ───────────────────────────────────────────────
 _MD_BOLD_ITALIC = re.compile(r'\*{1,3}(.*?)\*{1,3}')
@@ -79,13 +81,20 @@ def _strip_markdown(text: str) -> str:
 
 def _split_sentences(text: str) -> tuple[list[str], str]:
     """
-    Split text into complete sentences + remainder.
-    Returns (complete_sentences, leftover).
+    Split text into speakable chunks + remainder.
+    Always splits on sentence boundaries (.!?).
+    Also splits on clause boundaries (,;) when the accumulated text is long enough.
+    Returns (complete_chunks, leftover).
     """
     parts = _SENTENCE_END.split(text)
-    if len(parts) <= 1:
-        return [], text
-    return parts[:-1], parts[-1]
+    if len(parts) > 1:
+        return parts[:-1], parts[-1]
+    # No sentence boundary yet — try clause split if text is long enough
+    if len(text) >= _MIN_CLAUSE_CHARS:
+        clauses = _CLAUSE_END.split(text)
+        if len(clauses) > 1:
+            return clauses[:-1], clauses[-1]
+    return [], text
 
 
 # ── STT client (lazy singleton) ───────────────────────────────────────────────
@@ -250,6 +259,168 @@ async def voice_websocket_endpoint(
             "lang":       supported_lang,
         })
 
+    # Active pipeline task (cancelable on barge-in)
+    _pipeline_task: Optional[asyncio.Task] = None
+
+    async def _cancel_pipeline():
+        nonlocal _pipeline_task
+        if _pipeline_task and not _pipeline_task.done():
+            _pipeline_task.cancel()
+            try:
+                await _pipeline_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        _pipeline_task = None
+
+    async def _run_pipeline(audio_bytes: bytes):
+        """Full STT → ADK → TTS pipeline for one voice turn."""
+        nonlocal _pipeline_task
+
+        # ── 2. STT ────────────────────────────────────────────────────────
+        try:
+            transcript = await asyncio.to_thread(
+                _transcribe, audio_bytes, supported_lang
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("STT error: %s", exc, exc_info=True)
+            await websocket.send_json({
+                "type": "error",
+                "content": "Speech recognition failed. Please try again.",
+            })
+            return
+
+        if not transcript:
+            await websocket.send_json({
+                "type": "transcript",
+                "text": "",
+                "error": "Could not understand audio.",
+            })
+            return
+
+        # ── 3. Send transcript immediately ────────────────────────────────
+        await websocket.send_json({"type": "transcript", "text": transcript})
+
+        # ── 4. Materialise session on first real message ──────────────────
+        try:
+            await _ensure_session()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Voice session creation failed: %s", exc, exc_info=True)
+            await websocket.send_json({
+                "type": "error",
+                "content": "Could not start session. Please try again.",
+            })
+            return
+
+        await conversation_logger.log_message(
+            conv_id, "user", transcript, channel="voice"
+        )
+        await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
+
+        # ── 5. ADK streaming + sentence-level TTS pipeline ────────────────
+        content = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=transcript)],
+        )
+
+        reply_text = ""
+        reply_agent = "Stayforlong"
+        pending_text = ""
+
+        tts_queue: asyncio.Queue = asyncio.Queue()
+        _SENTINEL = object()
+
+        async def _tts_sender():
+            """Consume synthesized audio from tts_queue and forward to browser."""
+            s = 0
+            while True:
+                item = await tts_queue.get()
+                if item is _SENTINEL:
+                    break
+                text_chunk, = item
+                audio_bytes_out = await asyncio.to_thread(
+                    _synthesize, text_chunk, supported_lang
+                )
+                if audio_bytes_out:
+                    await websocket.send_json({
+                        "type":      "audio_chunk",
+                        "audio_b64": base64.b64encode(audio_bytes_out).decode(),
+                        "seq":       s,
+                    })
+                    s += 1
+
+        sender_task = asyncio.create_task(_tts_sender())
+
+        try:
+            async for event in get_runner().run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=content,
+            ):
+                if event.author and not event.is_final_response():
+                    await websocket.send_json(
+                        {"type": "typing", "agent": event.author}
+                    )
+
+                if event.is_final_response():
+                    if event.content and event.content.parts:
+                        for part in event.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                new_text = part.text
+                                reply_text += new_text
+                                pending_text += new_text
+
+                                chunks, pending_text = _split_sentences(pending_text)
+                                for chunk in chunks:
+                                    chunk = _strip_markdown(chunk.strip())
+                                    if chunk:
+                                        await tts_queue.put((chunk,))
+
+                    if event.author:
+                        reply_agent = event.author
+
+            if pending_text.strip():
+                await tts_queue.put((_strip_markdown(pending_text.strip()),))
+
+        except asyncio.CancelledError:
+            sender_task.cancel()
+            try:
+                await sender_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            await websocket.send_json({"type": "interrupted"})
+            raise
+        except Exception as exc:
+            logger.error("Error in voice ADK run_async: %s", exc, exc_info=True)
+            await websocket.send_json({
+                "type":    "error",
+                "content": "An internal error occurred. Please try again.",
+            })
+        finally:
+            if not sender_task.done():
+                await tts_queue.put(_SENTINEL)
+                try:
+                    await sender_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+        # ── 6. Send full text reply ───────────────────────────────────────
+        if reply_text:
+            await websocket.send_json({
+                "type":    "message",
+                "content": reply_text,
+                "agent":   reply_agent,
+            })
+            await conversation_logger.log_message(
+                conv_id, "assistant", reply_text, reply_agent, channel="voice"
+            )
+
+        # ── 7. Signal end of audio stream ─────────────────────────────────
+        await websocket.send_json({"type": "audio_done"})
+
     try:
         # ── Main loop ─────────────────────────────────────────────────────────
         while True:
@@ -261,9 +432,17 @@ async def voice_websocket_endpoint(
             if msg_type == "ping":
                 continue
 
+            # ── Barge-in: cancel active pipeline ──────────────────────────────
+            if msg_type == "interrupt":
+                await _cancel_pipeline()
+                continue
+
             audio_b64: str = data.get("audio_b64", "")
             if not audio_b64:
                 continue
+
+            # Cancel any in-progress pipeline before starting new one
+            await _cancel_pipeline()
 
             # ── 1. Decode audio ───────────────────────────────────────────────
             try:
@@ -276,127 +455,7 @@ async def voice_websocket_endpoint(
                 })
                 continue
 
-            # ── 2. STT ────────────────────────────────────────────────────────
-            try:
-                transcript = await asyncio.to_thread(
-                    _transcribe, audio_bytes, supported_lang
-                )
-            except Exception as exc:
-                logger.error("STT error: %s", exc, exc_info=True)
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "Speech recognition failed. Please try again.",
-                })
-                continue
-
-            if not transcript:
-                await websocket.send_json({
-                    "type": "transcript",
-                    "text": "",
-                    "error": "Could not understand audio.",
-                })
-                continue
-
-            # ── 3. Send transcript immediately ────────────────────────────────
-            await websocket.send_json({"type": "transcript", "text": transcript})
-
-            # ── 4. Materialise session on first real message ──────────────────
-            try:
-                await _ensure_session()
-            except Exception as exc:
-                logger.error("Voice session creation failed: %s", exc, exc_info=True)
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "Could not start session. Please try again.",
-                })
-                continue
-
-            await conversation_logger.log_message(
-                conv_id, "user", transcript, channel="voice"
-            )
-            await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
-
-            # ── 5. ADK streaming + sentence-level TTS pipeline ────────────────
-            try:
-                content = genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part(text=transcript)],
-                )
-
-                reply_text = ""
-                reply_agent = "Stayforlong"
-                pending_text = ""
-                seq = 0
-
-                async for event in get_runner().run_async(
-                    user_id=user_id,
-                    session_id=session_id,
-                    new_message=content,
-                ):
-                    if event.author and not event.is_final_response():
-                        await websocket.send_json(
-                            {"type": "typing", "agent": event.author}
-                        )
-
-                    if event.is_final_response():
-                        if event.content and event.content.parts:
-                            for part in event.content.parts:
-                                if hasattr(part, "text") and part.text:
-                                    new_text = part.text
-                                    reply_text += new_text
-                                    pending_text += new_text
-
-                                    sentences, pending_text = _split_sentences(pending_text)
-                                    for sentence in sentences:
-                                        sentence = _strip_markdown(sentence.strip())
-                                        if sentence:
-                                            audio_bytes_out = await asyncio.to_thread(
-                                                _synthesize, sentence, supported_lang
-                                            )
-                                            if audio_bytes_out:
-                                                await websocket.send_json({
-                                                    "type":      "audio_chunk",
-                                                    "audio_b64": base64.b64encode(audio_bytes_out).decode(),
-                                                    "seq":       seq,
-                                                })
-                                                seq += 1
-
-                        if event.author:
-                            reply_agent = event.author
-
-                # Synthesize any remaining text after final event
-                if pending_text.strip():
-                    audio_bytes_out = await asyncio.to_thread(
-                        _synthesize, _strip_markdown(pending_text.strip()), supported_lang
-                    )
-                    if audio_bytes_out:
-                        await websocket.send_json({
-                            "type":      "audio_chunk",
-                            "audio_b64": base64.b64encode(audio_bytes_out).decode(),
-                            "seq":       seq,
-                        })
-
-            except Exception as exc:
-                logger.error("Error in voice ADK run_async: %s", exc, exc_info=True)
-                await websocket.send_json({
-                    "type":    "error",
-                    "content": "An internal error occurred. Please try again.",
-                })
-                continue
-
-            # ── 6. Send full text reply ───────────────────────────────────────
-            if reply_text:
-                await websocket.send_json({
-                    "type":    "message",
-                    "content": reply_text,
-                    "agent":   reply_agent,
-                })
-                await conversation_logger.log_message(
-                    conv_id, "assistant", reply_text, reply_agent, channel="voice"
-                )
-
-            # ── 7. Signal end of audio stream ─────────────────────────────────
-            await websocket.send_json({"type": "audio_done"})
+            _pipeline_task = asyncio.create_task(_run_pipeline(audio_bytes))
 
     except WebSocketDisconnect:
         logger.info("Voice session %s (user %s) disconnected.", session_id, user_id)

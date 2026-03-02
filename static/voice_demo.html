@@ -403,6 +403,7 @@ h1 {
   var audioQueue = [];       // { seq, buffer } objects
   var nextSeq = 0;
   var isPlayingChain = false;
+  var activeSource = null;   // currently playing AudioBufferSourceNode
 
   // ── User ID persistence ──────────────────────────────────────────────────
   function _getUserId() {
@@ -509,6 +510,11 @@ h1 {
         setStatus('');
         break;
 
+      case 'interrupted':
+        hideTyping();
+        setStatus('');
+        break;
+
       case 'error':
         hideTyping();
         setStatus(data.content || 'An error occurred.', true);
@@ -559,7 +565,8 @@ h1 {
     var source = ctx.createBufferSource();
     source.buffer = item.buffer;
     source.connect(ctx.destination);
-    source.onended = _playNext;
+    source.onended = function () { activeSource = null; _playNext(); };
+    activeSource = source;
     source.start(0);
   }
 
@@ -574,8 +581,21 @@ h1 {
     audioQueue = [];
     nextSeq = 0;
     isPlayingChain = false;
+    activeSource = null;
     audioIndicator.classList.remove('active');
     _hideFeedback();
+  }
+
+  function _interruptPlayback() {
+    if (activeSource) {
+      try { activeSource.onended = null; activeSource.stop(); } catch (e) {}
+      activeSource = null;
+    }
+    _resetAudioQueue();
+    hideTyping();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'interrupt' }));
+    }
   }
 
   // ── Live interim transcript (SpeechRecognition) ───────────────────────────
@@ -624,7 +644,7 @@ h1 {
 
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(function (stream) {
-        _resetAudioQueue();
+        _interruptPlayback();
         audioChunks = [];
         isRecording = true;
         document.getElementById('btn-mic').classList.add('recording');
@@ -693,7 +713,7 @@ h1 {
     var input = document.getElementById('text-input');
     var text = input.value.trim();
     if (!text || !connected || !ws || ws.readyState !== WebSocket.OPEN) return;
-    // Text goes through the text WS (re-use voice WS just sends message field)
+    _interruptPlayback();
     ws.send(JSON.stringify({ message: text }));
     appendMsg('user', text, null, 'text');
     input.value = '';

@@ -307,42 +307,20 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
         })
         # Welcome is logged after the session is materialised (see message loop)
 
-        # ── Main message loop ─────────────────────────────────────────────────
-        while True:
-            data = await websocket.receive_json()
-            user_message = data.get("message", "").strip()
-            if not user_message:
-                continue
+        # Active ADK pipeline task (cancelable on barge-in)
+        _pipeline_task: asyncio.Task | None = None
 
-            # ── Greeting gate: don't create a session for trivial openers ─────
-            if session_id is None and _is_greeting(user_message):
-                await websocket.send_json({
-                    "type":    "message",
-                    "content": welcome_text,
-                    "agent":   "Stayforlong Assistant",
-                })
-                continue
+        async def _cancel_pipeline():
+            nonlocal _pipeline_task
+            if _pipeline_task and not _pipeline_task.done():
+                _pipeline_task.cancel()
+                try:
+                    await _pipeline_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            _pipeline_task = None
 
-            # ── Materialise session + conv on first substantive message ───────
-            first_message = session_id is None
-            try:
-                await _ensure_session()
-            except Exception as e:
-                logger.error("Session creation failed: %s", e, exc_info=True)
-                await websocket.send_json({
-                    "type":    "error",
-                    "content": "Could not start session. Please try again.",
-                })
-                continue
-
-            if first_message:
-                await conversation_logger.log_message(
-                    conv_id, "assistant", welcome_text, "Stayforlong Assistant"
-                )
-
-            await conversation_logger.log_message(conv_id, "user", user_message)
-            await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
-
+        async def _run_pipeline(user_message: str, first_message: bool):
             try:
                 content = genai_types.Content(
                     role="user",
@@ -369,13 +347,16 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
                         if event.author:
                             reply_agent = event.author
 
+            except asyncio.CancelledError:
+                await websocket.send_json({"type": "interrupted"})
+                raise
             except Exception as e:
                 logger.error("Error in ADK run_async: %s", e, exc_info=True)
                 await websocket.send_json({
                     "type":    "error",
                     "content": "An internal error occurred. Please try again.",
                 })
-                continue
+                return
 
             if reply_text:
                 await websocket.send_json({
@@ -386,6 +367,49 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
                 await conversation_logger.log_message(
                     conv_id, "assistant", reply_text, reply_agent
                 )
+
+        # ── Main message loop ─────────────────────────────────────────────
+        while True:
+            data = await websocket.receive_json()
+            user_message = data.get("message", "").strip()
+            if not user_message:
+                continue
+
+            # ── Greeting gate: don't create a session for trivial openers ─────
+            if session_id is None and _is_greeting(user_message):
+                await websocket.send_json({
+                    "type":    "message",
+                    "content": welcome_text,
+                    "agent":   "Stayforlong Assistant",
+                })
+                continue
+
+            # ── Cancel any in-progress pipeline (barge-in) ───────────────────
+            await _cancel_pipeline()
+
+            # ── Materialise session + conv on first substantive message ───────
+            first_message = session_id is None
+            try:
+                await _ensure_session()
+            except Exception as e:
+                logger.error("Session creation failed: %s", e, exc_info=True)
+                await websocket.send_json({
+                    "type":    "error",
+                    "content": "Could not start session. Please try again.",
+                })
+                continue
+
+            if first_message:
+                await conversation_logger.log_message(
+                    conv_id, "assistant", welcome_text, "Stayforlong Assistant"
+                )
+
+            await conversation_logger.log_message(conv_id, "user", user_message)
+            await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
+
+            _pipeline_task = asyncio.create_task(
+                _run_pipeline(user_message, first_message)
+            )
 
     except WebSocketDisconnect:
         logger.info("Session %s (user %s) disconnected.", session_id, user_id)
