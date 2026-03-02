@@ -331,7 +331,7 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
                 logger.error("Session creation failed: %s", e, exc_info=True)
                 await websocket.send_json({
                     "type":    "error",
-                    "content": f"Could not start session [{type(e).__name__}: {str(e)[:200]}]",
+                    "content": "Could not start session. Please try again.",
                 })
                 continue
 
