@@ -44,8 +44,37 @@ _VOICE_MAP: dict[str, str] = {
     "ca": "ca-ES-Standard-A",
 }
 
+# ── Language name map (must match what agent instructions expect) ────────────────
+_LANG_NAMES: dict[str, str] = {
+    "es": "Spanish", "en": "English", "fr": "French",
+    "de": "German",  "it": "Italian", "pt": "Portuguese", "ca": "Catalan",
+}
+
 # ── Sentence splitter ─────────────────────────────────────────────────────────
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
+
+# ── Markdown stripper (for TTS) ───────────────────────────────────────────────
+_MD_BOLD_ITALIC = re.compile(r'\*{1,3}(.*?)\*{1,3}')
+_MD_HEADING = re.compile(r'^\s*#{1,6}\s+', re.MULTILINE)
+_MD_LINK = re.compile(r'\[([^\]]+)\]\([^)]+\)')
+_MD_CODE = re.compile(r'`{1,3}[^`]*`{1,3}')
+_MD_BULLET = re.compile(r'^\s*[-*+]\s+', re.MULTILINE)
+_MD_NUMBERED = re.compile(r'^\s*\d+\.\s+', re.MULTILINE)
+_MD_BLOCKQUOTE = re.compile(r'^\s*>\s+', re.MULTILINE)
+_MD_HR = re.compile(r'^\s*[-*_]{3,}\s*$', re.MULTILINE)
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove markdown formatting so TTS reads plain text."""
+    text = _MD_BOLD_ITALIC.sub(r'\1', text)
+    text = _MD_HEADING.sub('', text)
+    text = _MD_LINK.sub(r'\1', text)
+    text = _MD_CODE.sub('', text)
+    text = _MD_BULLET.sub('', text)
+    text = _MD_NUMBERED.sub('', text)
+    text = _MD_BLOCKQUOTE.sub('', text)
+    text = _MD_HR.sub('', text)
+    return text.strip()
 
 
 def _split_sentences(text: str) -> tuple[list[str], str]:
@@ -141,8 +170,11 @@ def _synthesize(text: str, lang: str) -> bytes:
         "OGG_OPUS": texttospeech.AudioEncoding.OGG_OPUS,
         "LINEAR16": texttospeech.AudioEncoding.LINEAR16,
     }
+    # Chirp3-HD and Chirp-HD voices don't support MP3 — fall back to OGG_OPUS
+    is_chirp = "Chirp" in voice_name
+    default_encoding = "OGG_OPUS" if is_chirp else "MP3"
     audio_encoding = encoding_map.get(
-        config.TTS_AUDIO_ENCODING.upper(), texttospeech.AudioEncoding.MP3
+        config.TTS_AUDIO_ENCODING.upper(), encoding_map[default_encoding]
     )
 
     synthesis_input = texttospeech.SynthesisInput(text=text)
@@ -188,6 +220,7 @@ async def voice_websocket_endpoint(
     _ping_task = asyncio.create_task(_keepalive())
 
     supported_lang = lang if lang in _VOICE_MAP else "en"
+    lang_name = _LANG_NAMES.get(supported_lang, "English")
 
     if not user_id:
         user_id = f"anon_{uuid.uuid4().hex[:12]}"
@@ -203,7 +236,7 @@ async def voice_websocket_endpoint(
         adk_session = await session_service.create_session(
             app_name="stayforlong",
             user_id=user_id,
-            state={"lang": supported_lang, "channel": "voice"},
+            state={"lang": supported_lang, "lang_name": lang_name, "channel": "voice"},
         )
         session_id = adk_session.id
         conv_id = str(uuid.uuid4())
@@ -292,20 +325,8 @@ async def voice_websocket_endpoint(
 
                 reply_text = ""
                 reply_agent = "Stayforlong"
-                pending_text = ""   # accumulates partial reply for sentence splitting
-                seq = 0             # audio chunk sequence number
-
-                async def _send_tts_chunk(sentence: str, chunk_seq: int):
-                    """Synthesize one sentence and send it as an audio_chunk."""
-                    audio_bytes_out = await asyncio.to_thread(
-                        _synthesize, sentence, supported_lang
-                    )
-                    if audio_bytes_out:
-                        await websocket.send_json({
-                            "type":      "audio_chunk",
-                            "audio_b64": base64.b64encode(audio_bytes_out).decode(),
-                            "seq":       chunk_seq,
-                        })
+                pending_text = ""
+                seq = 0
 
                 async for event in get_runner().run_async(
                     user_id=user_id,
@@ -325,25 +346,40 @@ async def voice_websocket_endpoint(
                                     reply_text += new_text
                                     pending_text += new_text
 
-                                    # Synthesize complete sentences eagerly
                                     sentences, pending_text = _split_sentences(pending_text)
                                     for sentence in sentences:
-                                        sentence = sentence.strip()
+                                        sentence = _strip_markdown(sentence.strip())
                                         if sentence:
-                                            await _send_tts_chunk(sentence, seq)
-                                            seq += 1
+                                            audio_bytes_out = await asyncio.to_thread(
+                                                _synthesize, sentence, supported_lang
+                                            )
+                                            if audio_bytes_out:
+                                                await websocket.send_json({
+                                                    "type":      "audio_chunk",
+                                                    "audio_b64": base64.b64encode(audio_bytes_out).decode(),
+                                                    "seq":       seq,
+                                                })
+                                                seq += 1
 
                         if event.author:
                             reply_agent = event.author
 
                 # Synthesize any remaining text after final event
                 if pending_text.strip():
-                    await _send_tts_chunk(pending_text.strip(), seq)
+                    audio_bytes_out = await asyncio.to_thread(
+                        _synthesize, _strip_markdown(pending_text.strip()), supported_lang
+                    )
+                    if audio_bytes_out:
+                        await websocket.send_json({
+                            "type":      "audio_chunk",
+                            "audio_b64": base64.b64encode(audio_bytes_out).decode(),
+                            "seq":       seq,
+                        })
 
             except Exception as exc:
                 logger.error("Error in voice ADK run_async: %s", exc, exc_info=True)
                 await websocket.send_json({
-                    "type": "error",
+                    "type":    "error",
                     "content": "An internal error occurred. Please try again.",
                 })
                 continue

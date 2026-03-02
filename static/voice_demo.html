@@ -256,6 +256,56 @@ h1 {
   margin-top: 10px;
   text-align: center;
 }
+
+/* Voice feedback strip — sits between messages and input, never scrolls away */
+#voice-feedback {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid #f0e6ec;
+  background: #fdf5f8;
+  flex-shrink: 0;
+}
+#voice-feedback.active { display: flex; }
+
+/* Live interim transcript */
+#interim-bubble {
+  display: none;
+  flex-direction: column;
+  align-items: flex-end;
+  animation: fadein 0.15s ease;
+}
+#interim-bubble.active { display: flex; }
+#interim-bubble .msg-label { font-size:10px; color:#f60e5f; font-weight:700; margin-bottom:2px; text-transform:uppercase; }
+#interim-bubble .bubble {
+  background: #fce7f3;
+  color: #9d174d;
+  border-bottom-right-radius: 4px;
+  font-style: italic;
+  opacity: 0.9;
+  max-width: 100%;
+}
+
+/* Audio playing indicator */
+#audio-indicator {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #2e7d32;
+  font-weight: 600;
+}
+#audio-indicator.active { display: flex; }
+#audio-indicator .bars { display:flex; gap:3px; align-items:center; height:14px; }
+#audio-indicator .bars span {
+  width: 3px; background: #4caf50; border-radius: 2px;
+  animation: audiobar 0.7s ease-in-out infinite alternate;
+}
+#audio-indicator .bars span:nth-child(2) { animation-delay:0.15s; }
+#audio-indicator .bars span:nth-child(3) { animation-delay:0.3s; }
+#audio-indicator .bars span:nth-child(4) { animation-delay:0.15s; }
+@keyframes audiobar { from{height:3px} to{height:14px} }
 </style>
 </head>
 <body>
@@ -287,6 +337,10 @@ h1 {
   <div class="messages" id="messages">
     <div id="typing"><span></span><span></span><span></span></div>
   </div>
+  <div id="voice-feedback">
+    <div id="interim-bubble"><div class="msg-label">🎤 You</div><div class="bubble" id="interim-text"></div></div>
+    <div id="audio-indicator"><div class="bars"><span></span><span></span><span></span><span></span></div>&nbsp;🔊 Speaking…</div>
+  </div>
   <div class="input-row">
     <input id="text-input" type="text" placeholder="Type a message…" onkeydown="onTextKey(event)" />
     <button class="btn-mic" id="btn-mic"
@@ -309,12 +363,15 @@ h1 {
 (function () {
   'use strict';
 
-  // ── Config ────────────────────────────────────────────────────────────────
-  var wsUrlInput = document.getElementById('ws-url');
-  var langSelect = document.getElementById('lang-select');
-  var statusMsg  = document.getElementById('status-msg');
-  var statusDot  = document.getElementById('status-dot');
-  var agentLabel = document.getElementById('agent-label');
+  // ── DOM refs ──────────────────────────────────────────────────────────────
+  var wsUrlInput    = document.getElementById('ws-url');
+  var langSelect    = document.getElementById('lang-select');
+  var statusMsg     = document.getElementById('status-msg');
+  var statusDot     = document.getElementById('status-dot');
+  var agentLabel    = document.getElementById('agent-label');
+  var interimBubble = document.getElementById('interim-bubble');
+  var interimText   = document.getElementById('interim-text');
+  var audioIndicator= document.getElementById('audio-indicator');
 
   // Default URL based on hostname
   var defaultHost = location.hostname;
@@ -337,6 +394,9 @@ h1 {
   var mediaRecorder = null;
   var audioChunks = [];
   var isRecording = false;
+
+  // Live transcript (SpeechRecognition)
+  var liveRecog = null;
 
   // Audio playback queue (sequential, gapless)
   var audioCtx = null;
@@ -418,8 +478,11 @@ h1 {
 
       case 'transcript':
         hideTyping();
+        interimBubble.classList.remove('active');
+        interimText.textContent = '';
         if (data.text) {
           appendMsg('user', data.text, null, 'voice');
+          setStatus('Thinking…');
         } else if (data.error) {
           setStatus(data.error, true);
         }
@@ -432,6 +495,7 @@ h1 {
 
       case 'audio_chunk':
         hideTyping();
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
         _enqueueAudioChunk(data.audio_b64, data.seq);
         break;
 
@@ -442,7 +506,7 @@ h1 {
         break;
 
       case 'audio_done':
-        // All chunks received — playback already in progress
+        setStatus('');
         break;
 
       case 'error':
@@ -470,20 +534,26 @@ h1 {
     });
   }
 
+  function _showFeedback() { document.getElementById('voice-feedback').classList.add('active'); }
+  function _hideFeedback() { document.getElementById('voice-feedback').classList.remove('active'); }
+
   function _playNext() {
     if (audioQueue.length === 0) {
       isPlayingChain = false;
+      audioIndicator.classList.remove('active');
+      _hideFeedback();
       return;
     }
     var item = audioQueue[0];
     if (item.seq !== nextSeq) {
-      // Wait for the right sequence number
       isPlayingChain = false;
       return;
     }
     audioQueue.shift();
     nextSeq++;
     isPlayingChain = true;
+    audioIndicator.classList.add('active');
+    _showFeedback();
 
     var ctx = _getAudioCtx();
     var source = ctx.createBufferSource();
@@ -504,6 +574,41 @@ h1 {
     audioQueue = [];
     nextSeq = 0;
     isPlayingChain = false;
+    audioIndicator.classList.remove('active');
+    _hideFeedback();
+  }
+
+  // ── Live interim transcript (SpeechRecognition) ───────────────────────────
+  function _startLiveTranscript(lang) {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    liveRecog = new SR();
+    liveRecog.lang = lang;
+    liveRecog.interimResults = true;
+    liveRecog.continuous = true;
+    liveRecog.onresult = function (e) {
+      var interim = '';
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        if (!e.results[i].isFinal) interim += e.results[i][0].transcript;
+      }
+      if (interim) {
+        interimText.textContent = interim;
+        interimBubble.classList.add('active');
+        _showFeedback();
+      }
+    };
+    liveRecog.onerror = function () { /* ignore */ };
+    try { liveRecog.start(); } catch(e) { /* already started */ }
+  }
+
+  function _stopLiveTranscript() {
+    if (liveRecog) {
+      try { liveRecog.stop(); } catch(e) {}
+      liveRecog = null;
+    }
+    interimBubble.classList.remove('active');
+    interimText.textContent = '';
+    if (!isPlayingChain) _hideFeedback();
   }
 
   // ── MediaRecorder (push-to-talk) ──────────────────────────────────────────
@@ -515,13 +620,18 @@ h1 {
     // Resume AudioContext if suspended (autoplay policy)
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
 
+    var lang = langSelect.value;
+
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(function (stream) {
         _resetAudioQueue();
         audioChunks = [];
         isRecording = true;
         document.getElementById('btn-mic').classList.add('recording');
-        setStatus('Recording… release to send.');
+        setStatus('🎤 Recording… release to send.');
+
+        // Start live transcript display alongside recording
+        _startLiveTranscript(lang + '-' + lang.toUpperCase());
 
         var options = {};
         if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
@@ -539,7 +649,6 @@ h1 {
         mediaRecorder.onstop = function () {
           isRecording = false;
           document.getElementById('btn-mic').classList.remove('recording');
-          // Stop all tracks to release mic
           stream.getTracks().forEach(function (t) { t.stop(); });
           var blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
           _sendAudio(blob);
@@ -555,6 +664,7 @@ h1 {
   function stopRecording(evt) {
     if (evt) evt.preventDefault();
     if (!isRecording || !mediaRecorder) return;
+    _stopLiveTranscript();
     mediaRecorder.stop();
     setStatus('Processing…');
   }
