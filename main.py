@@ -3,7 +3,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from ws.handler import websocket_endpoint
+from ws.voice_handler import voice_websocket_endpoint
 from admin.router import router as admin_router
 import config  # Must be imported first to set env vars before ADK initializes
 
@@ -82,6 +84,20 @@ async def ws_route(websocket: WebSocket):
     lang    = websocket.query_params.get("lang", "en")[:2].lower()
     user_id = websocket.query_params.get("user_id", "").strip()
     await websocket_endpoint(websocket, lang, user_id)
+
+
+@app.websocket("/ws/voice")
+async def ws_voice_route(websocket: WebSocket):
+    lang    = websocket.query_params.get("lang", "en")[:2].lower()
+    user_id = websocket.query_params.get("user_id", "").strip()
+    await voice_websocket_endpoint(websocket, lang, user_id)
+
+
+# Serve static demo files (voice_demo.html etc.) — must be mounted after routes
+import os as _os
+_static_dir = _os.path.join(_os.path.dirname(__file__), "static")
+if _os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 @app.get("/health")

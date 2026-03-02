@@ -112,6 +112,15 @@ HISTORY_RECOVERY_HOURS = int(os.environ.get("HISTORY_RECOVERY_HOURS", "48"))
 # If empty, the dashboard is open (dev mode only — set a key in production!).
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
 
+# ── Voice (STT / TTS via Vertex AI / Cloud AI) ───────────────────────────────
+# Default TTS voice name. Neural2 voices give higher quality.
+# Full list: https://cloud.google.com/text-to-speech/docs/voices
+TTS_VOICE_NAME = os.environ.get("TTS_VOICE_NAME", "")
+
+# Audio encoding for TTS output sent to the browser.
+# MP3 works everywhere; OGG_OPUS is smaller but less compatible.
+TTS_AUDIO_ENCODING = os.environ.get("TTS_AUDIO_ENCODING", "MP3")
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 # Comma-separated list of allowed origins.
 # ADMIN_ORIGIN: URL where sfl-multi-agents-admin is hosted.

@@ -106,6 +106,7 @@ def _entry_to_conv(entry) -> dict:
         "user_id":          payload.get("user_id", ""),
         "session_id":       payload.get("session_id", ""),
         "language":         payload.get("language", ""),
+        "channel":          payload.get("channel", "text"),
         "status":           payload.get("status", "active"),
         "message_count":    payload.get("message_count", 0),
         "agents_used":      payload.get("agents_used", []),
@@ -122,6 +123,7 @@ def _entry_to_msg(entry) -> dict:
         "role":      payload.get("role", ""),
         "content":   payload.get("content", ""),
         "agent":     payload.get("agent"),
+        "channel":   payload.get("channel", "text"),
         "timestamp": _ts_to_iso(entry.timestamp),
     }
 
@@ -134,7 +136,8 @@ class ConversationLogger:
     # ── Write events ──────────────────────────────────────────────────────────
 
     async def log_conversation_start(
-        self, conv_id: str, user_id: str, session_id: str, language: str
+        self, conv_id: str, user_id: str, session_id: str, language: str,
+        channel: str = "text",
     ) -> None:
         _client, cl = _get_cl()
         if not cl:
@@ -148,6 +151,7 @@ class ConversationLogger:
                     "user_id":          user_id,
                     "session_id":       session_id,
                     "language":         language,
+                    "channel":          channel,
                     "status":           "active",
                     "tags":             [],
                     "agents_used":      [],
@@ -159,6 +163,7 @@ class ConversationLogger:
                     "user_id":         user_id,
                     "event_type":      "conversation_start",
                     "language":        language,
+                    "channel":         channel,
                 },
                 severity="INFO",
             )
@@ -171,6 +176,7 @@ class ConversationLogger:
         role: str,
         content: str,
         agent: Optional[str] = None,
+        channel: str = "text",
     ) -> None:
         if not conv_id:
             return
@@ -185,12 +191,14 @@ class ConversationLogger:
                     "role":            role,
                     "content":         content,
                     "agent":           agent,
+                    "channel":         channel,
                     "timestamp":       datetime.now(timezone.utc).isoformat(),
                 },
                 labels={
                     "conversation_id": conv_id,
                     "event_type":      "message",
                     "role":            role,
+                    "channel":         channel,
                 },
                 severity="INFO",
             )
