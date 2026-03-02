@@ -94,6 +94,7 @@ async def health():
         "api_key_configured": bool(getattr(config, "GEMINI_API_KEY", "")),
         "cloud_logging_enabled": config.CLOUD_LOGGING_ENABLED,
         "triage_engine_id": config.TRIAGE_ENGINE_ID or None,
+        "agent_engine_location": config.AGENT_ENGINE_LOCATION,
     }
 
 
