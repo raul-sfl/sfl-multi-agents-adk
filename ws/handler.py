@@ -234,11 +234,11 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     # connection while we make the initial Vertex AI calls (history + session).
     await websocket.send_json({"type": "ping"})
 
-    # Keepalive task: ping every 20 s to prevent Railway's idle timeout from
+    # Keepalive task: ping every 10 s to prevent Railway's idle timeout from
     # dropping long-lived connections with no user traffic.
     async def _keepalive():
         while True:
-            await asyncio.sleep(20)
+            await asyncio.sleep(10)
             try:
                 await websocket.send_json({"type": "ping"})
             except Exception:
@@ -252,9 +252,6 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
     # Assign an anonymous ID when the client doesn't provide one
     if not user_id:
         user_id = f"anon_{uuid.uuid4().hex[:12]}"
-
-    # ── History recovery from VertexAiSessionService ──────────────────────────
-    history_messages = await _get_history(user_id)
 
     # ── Lazy state — session & conv created on first substantive message ──────
     session_id: str | None = None
@@ -284,29 +281,33 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
             "history":    [],
         })
 
-    # ── Send session_init (with history) before welcome — session_id TBD ─────
-    await websocket.send_json({
-        "type":       "session_init",
-        "session_id": None,
-        "user_id":    user_id,
-        "lang":       supported_lang,
-        "history":    history_messages,
-    })
-
-    # ── Welcome message ───────────────────────────────────────────────────────
-    if history_messages:
-        welcome_text = await _build_continuation_greeting(history_messages, supported_lang, lang_name)
-    else:
-        welcome_text = WELCOME_MESSAGES[supported_lang]
-    await websocket.send_json({
-        "type":    "message",
-        "content": welcome_text,
-        "agent":   "Stayforlong Assistant",
-    })
-    # Welcome is logged after the session is materialised (see message loop)
-
-    # ── Main message loop ─────────────────────────────────────────────────────
+    # ── Everything below is wrapped so _ping_task is always cancelled ──────────
     try:
+        # ── History recovery from VertexAiSessionService ──────────────────────
+        history_messages = await _get_history(user_id)
+
+        # ── Send session_init (with history) before welcome ───────────────────
+        await websocket.send_json({
+            "type":       "session_init",
+            "session_id": None,
+            "user_id":    user_id,
+            "lang":       supported_lang,
+            "history":    history_messages,
+        })
+
+        # ── Welcome message ───────────────────────────────────────────────────
+        if history_messages:
+            welcome_text = await _build_continuation_greeting(history_messages, supported_lang, lang_name)
+        else:
+            welcome_text = WELCOME_MESSAGES[supported_lang]
+        await websocket.send_json({
+            "type":    "message",
+            "content": welcome_text,
+            "agent":   "Stayforlong Assistant",
+        })
+        # Welcome is logged after the session is materialised (see message loop)
+
+        # ── Main message loop ─────────────────────────────────────────────────
         while True:
             data = await websocket.receive_json()
             user_message = data.get("message", "").strip()
@@ -324,7 +325,15 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
 
             # ── Materialise session + conv on first substantive message ───────
             first_message = session_id is None
-            await _ensure_session()
+            try:
+                await _ensure_session()
+            except Exception as e:
+                logger.error("Session creation failed: %s", e, exc_info=True)
+                await websocket.send_json({
+                    "type":    "error",
+                    "content": "Could not start session. Please try again.",
+                })
+                continue
 
             if first_message:
                 await conversation_logger.log_message(
