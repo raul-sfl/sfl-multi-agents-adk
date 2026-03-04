@@ -21,6 +21,7 @@ Dashboard UI lives in sfl-multi-agents-admin.
 """
 
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -28,6 +29,63 @@ from typing import Optional
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
+
+
+def _iso_to_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def _group_key_for_dt(dt: Optional[datetime], minutes_window: int) -> str:
+    if dt is None:
+        return "unknown"
+    if minutes_window > 0:
+        bucket_minute = (dt.minute // minutes_window) * minutes_window
+        bucket = dt.replace(minute=bucket_minute, second=0, microsecond=0)
+        return "m:" + bucket.isoformat()
+    day = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return "d:" + day.date().isoformat()
+
+
+def _group_label_from_key(group_key: str, minutes_window: int) -> str:
+    if group_key == "unknown":
+        return "Unknown date"
+    if group_key.startswith("d:"):
+        day_str = group_key[2:]
+        try:
+            day = datetime.fromisoformat(day_str).date()
+            today = datetime.now(timezone.utc).date()
+            if day == today:
+                return "Today"
+            if day == today.fromordinal(today.toordinal() - 1):
+                return "Yesterday"
+        except ValueError:
+            return day_str
+        return day_str
+    if group_key.startswith("m:"):
+        dt = _iso_to_dt(group_key[2:])
+        if not dt:
+            return group_key
+        from datetime import timedelta
+        end = dt + timedelta(minutes=minutes_window)
+        return f"{dt.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%H:%M')}"
+    return group_key
+
+
+def _apply_conversation_filters(convs: list[dict], status: Optional[str], lang: Optional[str]) -> list[dict]:
+    filtered = convs
+    if status:
+        filtered = [c for c in filtered if c.get("status") == status]
+    if lang:
+        filtered = [c for c in filtered if c.get("language") == lang]
+    return filtered
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
@@ -69,11 +127,81 @@ async def api_list_conversations(
     from services.conversation_logger import conversation_logger
     result = await conversation_logger.list_conversations(limit=limit)
     convs = result.get("items", []) if isinstance(result, dict) else result
-    if status:
-        convs = [c for c in convs if c.get("status") == status]
-    if lang:
-        convs = [c for c in convs if c.get("language") == lang]
-    return convs
+    return _apply_conversation_filters(convs, status=status, lang=lang)
+
+
+@router.get("/api/conversations/groups")
+async def api_list_conversation_groups(
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    lang: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    _auth=Depends(require_admin),
+):
+    import config
+    from services.conversation_logger import conversation_logger
+
+    result = await conversation_logger.list_conversations(user_id=user_id, limit=limit)
+    convs = result.get("items", []) if isinstance(result, dict) else result
+    convs = _apply_conversation_filters(convs, status=status, lang=lang)
+
+    minutes_window = config.CONVERSATION_GROUP_WINDOW_MINUTES
+    grouped: dict[str, dict] = {}
+    for conv in convs:
+        conv_dt = _iso_to_dt(conv.get("last_activity_at") or conv.get("started_at"))
+        group_key = _group_key_for_dt(conv_dt, minutes_window)
+        group = grouped.get(group_key)
+        if not group:
+            grouped[group_key] = {
+                "group_key": group_key,
+                "label": _group_label_from_key(group_key, minutes_window),
+                "count": 1,
+                "last_activity_at": conv.get("last_activity_at") or conv.get("started_at"),
+            }
+            continue
+        group["count"] += 1
+        current_last = _iso_to_dt(group.get("last_activity_at"))
+        conv_last = _iso_to_dt(conv.get("last_activity_at") or conv.get("started_at"))
+        if conv_last and (not current_last or conv_last > current_last):
+            group["last_activity_at"] = conv.get("last_activity_at") or conv.get("started_at")
+
+    groups = list(grouped.values())
+    groups.sort(
+        key=lambda g: _iso_to_dt(g.get("last_activity_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return groups
+
+
+@router.get("/api/conversations/groups/{group_key}/conversations")
+async def api_list_conversations_by_group(
+    group_key: str,
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    lang: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    _auth=Depends(require_admin),
+):
+    import config
+    from services.conversation_logger import conversation_logger
+
+    result = await conversation_logger.list_conversations(user_id=user_id, limit=limit)
+    convs = result.get("items", []) if isinstance(result, dict) else result
+    convs = _apply_conversation_filters(convs, status=status, lang=lang)
+
+    minutes_window = config.CONVERSATION_GROUP_WINDOW_MINUTES
+    out: list[dict] = []
+    for conv in convs:
+        conv_dt = _iso_to_dt(conv.get("last_activity_at") or conv.get("started_at"))
+        conv_group_key = _group_key_for_dt(conv_dt, minutes_window)
+        if conv_group_key == group_key:
+            out.append(conv)
+
+    out.sort(
+        key=lambda c: _iso_to_dt(c.get("last_activity_at") or c.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return out
 
 
 @router.get("/api/conversations/{conv_id}")
@@ -105,11 +233,7 @@ async def api_user_conversations(
     from services.conversation_logger import conversation_logger
     result = await conversation_logger.list_conversations(user_id=user_id)
     convs = result.get("items", []) if isinstance(result, dict) else result
-    if status:
-        convs = [c for c in convs if c.get("status") == status]
-    if lang:
-        convs = [c for c in convs if c.get("language") == lang]
-    return convs
+    return _apply_conversation_filters(convs, status=status, lang=lang)
 
 
 # ── Agent management ──────────────────────────────────────────────────────────

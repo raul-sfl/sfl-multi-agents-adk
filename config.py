@@ -107,6 +107,16 @@ CLOUD_LOGGING_LOG_NAME = os.environ.get("CLOUD_LOGGING_LOG_NAME", "stayforlong-c
 # How many hours back to look for a previous session to offer history recovery
 HISTORY_RECOVERY_HOURS = int(os.environ.get("HISTORY_RECOVERY_HOURS", "48"))
 
+# Conversation continuity/grouping window.
+# Default behavior (0): reuse/group by same UTC calendar day.
+# Set a positive number (e.g. 5) to use minute windows instead.
+try:
+    CONVERSATION_GROUP_WINDOW_MINUTES = max(
+        0, int(os.environ.get("CONVERSATION_GROUP_WINDOW_MINUTES", "0"))
+    )
+except ValueError:
+    CONVERSATION_GROUP_WINDOW_MINUTES = 0
+
 # ── Admin dashboard ───────────────────────────────────────────────────────────
 # Protect the /admin dashboard with a secret key.
 # If empty, the dashboard is open (dev mode only — set a key in production!).

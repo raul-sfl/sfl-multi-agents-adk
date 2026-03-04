@@ -98,6 +98,13 @@ def _iso_to_dt(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _is_within_group_window(ts: datetime, now: datetime) -> bool:
+    window_minutes = config.CONVERSATION_GROUP_WINDOW_MINUTES
+    if window_minutes > 0:
+        return ts >= (now - timedelta(minutes=window_minutes))
+    return ts.date() == now.date()
+
+
 def _entry_to_conv(entry) -> dict:
     payload = entry.payload if isinstance(entry.payload, dict) else {}
     ts = entry.timestamp
@@ -249,6 +256,81 @@ class ConversationLogger:
         except Exception as exc:
             logger.error("set_conversation_tags(%s): %s", conv_id, exc)
 
+    async def find_reusable_conversation_id(
+        self,
+        user_id: str,
+        channel: str = "text",
+    ) -> Optional[str]:
+        """
+        Return the most recently active conversation id for this user that falls
+        inside the configured grouping window.
+
+        Default window: same UTC calendar day.
+        Override: CONVERSATION_GROUP_WINDOW_MINUTES > 0.
+        """
+        if not user_id:
+            return None
+        cl_client, _cl = _get_cl()
+        if not cl_client:
+            return None
+        try:
+            from google.cloud import logging as cloud_logging  # noqa: PLC0415
+
+            entries = list(cl_client.list_entries(
+                filter_=(
+                    f'logName="{_log_name()}"'
+                    f' AND jsonPayload.event_type="conversation_start"'
+                    f' AND labels.user_id="{user_id}"'
+                    f' AND labels.channel="{channel}"'
+                ),
+                order_by=cloud_logging.DESCENDING,
+                page_size=50,
+            ))
+            if not entries:
+                return None
+
+            seen_ids: set[str] = set()
+            candidates: list[dict] = []
+            for entry in entries:
+                conv = _entry_to_conv(entry)
+                conv_id = conv.get("id")
+                if not conv_id or conv_id in seen_ids:
+                    continue
+                seen_ids.add(conv_id)
+                candidates.append(conv)
+
+            if not candidates:
+                return None
+
+            conv_ids = [c["id"] for c in candidates]
+            msg_stats = await self._message_stats_for(conv_ids)
+
+            now = datetime.now(timezone.utc)
+            best_id: Optional[str] = None
+            best_dt: Optional[datetime] = None
+
+            for c in candidates:
+                conv_id = c["id"]
+                stats = msg_stats.get(conv_id) or {}
+                last_iso = (
+                    stats.get("last_at")
+                    or c.get("last_activity_at")
+                    or c.get("started_at")
+                )
+                last_dt = _iso_to_dt(last_iso)
+                if not last_dt:
+                    continue
+                if not _is_within_group_window(last_dt, now):
+                    continue
+                if best_dt is None or last_dt > best_dt:
+                    best_dt = last_dt
+                    best_id = conv_id
+
+            return best_id
+        except Exception as exc:
+            logger.error("find_reusable_conversation_id(%s): %s", user_id, exc)
+            return None
+
     # ── Admin read queries ────────────────────────────────────────────────────
 
     async def list_conversations(
@@ -304,8 +386,12 @@ class ConversationLogger:
             )
 
             items = []
+            seen_ids: set[str] = set()
             for entry in entries:
                 c = _entry_to_conv(entry)
+                if c["id"] in seen_ids:
+                    continue
+                seen_ids.add(c["id"])
                 if tag_map.get(c["id"]):
                     c["tags"] = tag_map[c["id"]]
                 stats = msg_stats.get(c["id"])
@@ -360,6 +446,7 @@ class ConversationLogger:
                         f' AND jsonPayload.event_type="conversation_end"'
                         f' AND labels.conversation_id="{conv_id}"'
                     ),
+                    order_by=cloud_logging.DESCENDING,
                     page_size=1,
                 ))),
             )
@@ -372,7 +459,13 @@ class ConversationLogger:
                 if stats["last_at"]:
                     c["last_activity_at"] = stats["last_at"]
             if closed:
-                c["status"] = "closed"
+                closed_at = _ts_to_iso(closed[0].timestamp)
+                closed_dt = _iso_to_dt(closed_at)
+                last_dt = _iso_to_dt(c.get("last_activity_at") or c.get("started_at"))
+                if closed_dt and last_dt and closed_dt >= last_dt:
+                    c["status"] = "closed"
+            else:
+                c["status"] = "active"
             return c
         except Exception as exc:
             logger.error("get_conversation(%s): %s", conv_id, exc)

@@ -11,3 +11,4 @@ opentelemetry-sdk>=1.20.0
 opentelemetry-exporter-gcp-trace>=1.6.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+langdetect>=1.0.9

@@ -268,10 +268,15 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
             state={"lang": supported_lang, "lang_name": lang_name},
         )
         session_id = adk_session.id
-        conv_id = str(uuid.uuid4())
-        await conversation_logger.log_conversation_start(
-            conv_id, user_id, session_id, supported_lang
+        conv_id = await conversation_logger.find_reusable_conversation_id(
+            user_id=user_id,
+            channel="text",
         )
+        if not conv_id:
+            conv_id = str(uuid.uuid4())
+            await conversation_logger.log_conversation_start(
+                conv_id, user_id, session_id, supported_lang
+            )
         # Notify client of the real session_id now that it exists
         await websocket.send_json({
             "type":       "session_init",
@@ -329,16 +334,29 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
 
                 reply_text = ""
                 reply_agent = "Stayforlong"
+                streaming_started = False
 
                 async for event in get_runner().run_async(
                     user_id=user_id,
                     session_id=session_id,
                     new_message=content,
                 ):
-                    if event.author and not event.is_final_response():
-                        await websocket.send_json(
-                            {"type": "typing", "agent": event.author}
-                        )
+                    if not event.is_final_response():
+                        if event.content and event.content.parts:
+                            for part in event.content.parts:
+                                if hasattr(part, "text") and part.text:
+                                    streaming_started = True
+                                    if event.author:
+                                        reply_agent = event.author
+                                    await websocket.send_json({
+                                        "type":    "chunk",
+                                        "content": part.text,
+                                        "agent":   reply_agent,
+                                    })
+                        elif event.author:
+                            await websocket.send_json(
+                                {"type": "typing", "agent": event.author}
+                            )
                     if event.is_final_response():
                         if event.content and event.content.parts:
                             for part in event.content.parts:
@@ -359,6 +377,17 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
                 return
 
             if reply_text:
+                if not streaming_started:
+                    # Fallback: ADK didn't emit partial chunks — stream word by word
+                    words = reply_text.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word if i == len(words) - 1 else word + " "
+                        await websocket.send_json({
+                            "type":    "chunk",
+                            "content": chunk,
+                            "agent":   reply_agent,
+                        })
+                        await asyncio.sleep(0)
                 await websocket.send_json({
                     "type":    "message",
                     "content": reply_text,

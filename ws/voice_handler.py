@@ -25,6 +25,9 @@ from typing import Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 from google.genai import types as genai_types
+from langdetect import detect as _langdetect, LangDetectException
+from langdetect import DetectorFactory as _DetectorFactory
+_DetectorFactory.seed = 42  # deterministic results
 
 from orchestrator.adk_runner import get_runner, session_service
 from services.conversation_logger import conversation_logger
@@ -49,6 +52,29 @@ _LANG_NAMES: dict[str, str] = {
     "es": "Spanish", "en": "English", "fr": "French",
     "de": "German",  "it": "Italian", "pt": "Portuguese", "ca": "Catalan",
 }
+
+# ── BCP-47 language codes (shared by STT and TTS) ────────────────────────────
+_LANG_BCP47: dict[str, str] = {
+    "es": "es-ES", "en": "en-US", "fr": "fr-FR",
+    "de": "de-DE", "it": "it-IT", "pt": "pt-PT", "ca": "ca-ES",
+}
+
+# ── STT model overrides (default: latest_short; ca not supported by latest_short) ──
+_STT_MODEL: dict[str, str] = {
+    "ca": "default",
+}
+
+
+def _detect_lang_from_text(text: str, fallback: str) -> str:
+    """Detect language code from transcript text. Falls back to `fallback` on failure."""
+    if not text.strip():
+        return fallback
+    try:
+        detected = _langdetect(text)[:2].lower()
+        return detected if detected in _LANG_BCP47 else fallback
+    except LangDetectException:
+        return fallback
+
 
 # ── Sentence / clause splitter ───────────────────────────────────────────────
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
@@ -123,9 +149,10 @@ def _get_tts_client():
 
 # ── STT: transcribe audio bytes ───────────────────────────────────────────────
 
-def _transcribe(audio_bytes: bytes, lang: str) -> str:
+def _transcribe(audio_bytes: bytes, lang: str) -> tuple[str, str]:
     """
-    Send audio to Cloud Speech-to-Text and return the transcript.
+    Send audio to Cloud Speech-to-Text and return (transcript, detected_lang).
+    Uses alternative_language_codes so the API auto-detects the actual language spoken.
     Accepts WebM/Opus as produced by MediaRecorder in Chrome/Firefox/Safari.
     """
     from google.cloud import speech
@@ -133,28 +160,44 @@ def _transcribe(audio_bytes: bytes, lang: str) -> str:
     client = _get_stt_client()
     audio = speech.RecognitionAudio(content=audio_bytes)
 
-    # BCP-47 language code: "es" → "es-ES", "en" → "en-US", etc.
-    lang_map = {
-        "es": "es-ES", "en": "en-US", "fr": "fr-FR",
-        "de": "de-DE", "it": "it-IT", "pt": "pt-PT", "ca": "ca-ES",
-    }
-    language_code = lang_map.get(lang, f"{lang}-{lang.upper()}")
+    language_code = _LANG_BCP47.get(lang, f"{lang}-{lang.upper()}")
+    alt_codes = [v for k, v in _LANG_BCP47.items() if k != lang]
 
     config_stt = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
         sample_rate_hertz=48000,
         language_code=language_code,
+        alternative_language_codes=alt_codes,
         enable_automatic_punctuation=True,
-        model="latest_short",
+        model=_STT_MODEL.get(lang, "latest_short"),
     )
 
     try:
         response = client.recognize(config=config_stt, audio=audio)
         parts = [r.alternatives[0].transcript for r in response.results if r.alternatives]
-        return " ".join(parts).strip()
+        transcript = " ".join(parts).strip()
+        # Detect language from transcript text (more reliable than STT's language_code field,
+        # which often returns the primary language even when an alternative was spoken).
+        detected_lang = _detect_lang_from_text(transcript, lang)
+        return transcript, detected_lang
     except Exception as exc:
         logger.warning("STT recognition failed: %s", exc)
-        return ""
+        return "", lang
+
+
+# ── TTS voice adapter ────────────────────────────────────────────────────────
+
+def _adapt_voice_for_lang(base_voice: str, lang: str) -> str:
+    """
+    Adapt a voice name to the target language by substituting the lang-REGION prefix.
+    Example: base="en-US-Chirp3-HD-Aoede", lang="es" → "es-ES-Chirp3-HD-Aoede"
+    Falls back to _VOICE_MAP if lang unknown, base_voice too short, or format invalid.
+    """
+    lang_prefix = _LANG_BCP47.get(lang)
+    if not lang_prefix or len(base_voice) < 7 or base_voice[5:6] != "-":
+        return _VOICE_MAP.get(lang) or base_voice
+    suffix = base_voice[6:]  # e.g. "Chirp3-HD-Aoede", "Neural2-A"
+    return f"{lang_prefix}-{suffix}"
 
 
 # ── TTS: synthesize text → audio bytes ───────────────────────────────────────
@@ -168,8 +211,11 @@ def _synthesize(text: str, lang: str) -> bytes:
 
     client = _get_tts_client()
 
-    # Determine voice name: explicit config override > per-language default
-    voice_name = config.TTS_VOICE_NAME or _VOICE_MAP.get(lang, "en-US-Neural2-F")
+    # Determine voice name: adapt .env template to client language, or use per-lang map
+    if config.TTS_VOICE_NAME:
+        voice_name = _adapt_voice_for_lang(config.TTS_VOICE_NAME, lang)
+    else:
+        voice_name = _VOICE_MAP.get(lang, "en-US-Neural2-F")
 
     # Derive language code from voice name (first 5 chars, e.g. "es-ES")
     voice_lang = voice_name[:5] if len(voice_name) >= 5 else f"{lang}-{lang.upper()}"
@@ -248,10 +294,15 @@ async def voice_websocket_endpoint(
             state={"lang": supported_lang, "lang_name": lang_name, "channel": "voice"},
         )
         session_id = adk_session.id
-        conv_id = str(uuid.uuid4())
-        await conversation_logger.log_conversation_start(
-            conv_id, user_id, session_id, supported_lang, channel="voice"
+        conv_id = await conversation_logger.find_reusable_conversation_id(
+            user_id=user_id,
+            channel="voice",
         )
+        if not conv_id:
+            conv_id = str(uuid.uuid4())
+            await conversation_logger.log_conversation_start(
+                conv_id, user_id, session_id, supported_lang, channel="voice"
+            )
         await websocket.send_json({
             "type":       "session_init",
             "session_id": session_id,
@@ -272,14 +323,14 @@ async def voice_websocket_endpoint(
                 pass
         _pipeline_task = None
 
-    async def _run_pipeline(audio_bytes: bytes):
+    async def _run_pipeline(audio_bytes: bytes, turn_lang: str):
         """Full STT → ADK → TTS pipeline for one voice turn."""
         nonlocal _pipeline_task
 
         # ── 2. STT ────────────────────────────────────────────────────────
         try:
-            transcript = await asyncio.to_thread(
-                _transcribe, audio_bytes, supported_lang
+            transcript, detected_lang = await asyncio.to_thread(
+                _transcribe, audio_bytes, turn_lang
             )
         except asyncio.CancelledError:
             raise
@@ -321,9 +372,16 @@ async def voice_websocket_endpoint(
         await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
 
         # ── 5. ADK streaming + sentence-level TTS pipeline ────────────────
+        # Inject per-turn language directive so agents respond in the detected
+        # language, overriding the session-level lang_name (fixed at connection).
+        if detected_lang != supported_lang:
+            detected_lang_name = _LANG_NAMES.get(detected_lang, "English")
+            message_text = f"[Respond in {detected_lang_name}]\n{transcript}"
+        else:
+            message_text = transcript
         content = genai_types.Content(
             role="user",
-            parts=[genai_types.Part(text=transcript)],
+            parts=[genai_types.Part(text=message_text)],
         )
 
         reply_text = ""
@@ -342,7 +400,7 @@ async def voice_websocket_endpoint(
                     break
                 text_chunk, = item
                 audio_bytes_out = await asyncio.to_thread(
-                    _synthesize, text_chunk, supported_lang
+                    _synthesize, text_chunk, detected_lang
                 )
                 if audio_bytes_out:
                     await websocket.send_json({
@@ -441,6 +499,10 @@ async def voice_websocket_endpoint(
             if not audio_b64:
                 continue
 
+            # Per-turn language (client sends current selector value with each audio message)
+            raw_lang = data.get("lang", supported_lang)[:2].lower()
+            turn_lang = raw_lang if raw_lang in _VOICE_MAP else supported_lang
+
             # Cancel any in-progress pipeline before starting new one
             await _cancel_pipeline()
 
@@ -455,7 +517,7 @@ async def voice_websocket_endpoint(
                 })
                 continue
 
-            _pipeline_task = asyncio.create_task(_run_pipeline(audio_bytes))
+            _pipeline_task = asyncio.create_task(_run_pipeline(audio_bytes, turn_lang))
 
     except WebSocketDisconnect:
         logger.info("Voice session %s (user %s) disconnected.", session_id, user_id)

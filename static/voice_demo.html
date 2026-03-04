@@ -697,7 +697,7 @@ h1 {
     var reader = new FileReader();
     reader.onload = function () {
       var b64 = reader.result.split(',')[1];
-      ws.send(JSON.stringify({ audio_b64: b64 }));
+      ws.send(JSON.stringify({ audio_b64: b64, lang: langSelect.value }));
       showTyping('Stayforlong');
       setStatus('Waiting for response…');
     };
