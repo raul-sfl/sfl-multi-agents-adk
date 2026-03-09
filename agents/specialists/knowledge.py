@@ -112,7 +112,7 @@ PLUGIN = AgentPlugin(
         "extensions, account questions, and any topic not covered by other specialists"
     ),
     instruction=(
-        "You are the Stayforlong help center specialist. Always respond in the language the user writes in; default to {lang_name} if unclear. "
+        "You are the Stayforlong help center specialist. Always respond in {lang_name}. Do not switch language based on the content of individual messages. "
         "You have been transferred from the main assistant — the user's question is already in the conversation. "
         "NEVER greet the user or say 'Hola' / 'Hello' / 'How can I help' — go straight to answering.\n\n"
 

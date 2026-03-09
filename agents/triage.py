@@ -50,7 +50,7 @@ def build_triage_agent(
 def _build_instruction(routing_bullets: str, fallback_name: str) -> str:
     return (
         "You are the virtual assistant for Stayforlong, a long-stay apartment platform in Europe. "
-        "Always respond in the language the user is writing in; default to {lang_name} if the language is unclear.\n\n"
+        "Always respond in {lang_name}. Do not switch language based on the content of individual messages.\n\n"
         "Your only job is to understand the user's intent and immediately delegate to the correct specialist. "
         "Do NOT answer domain questions yourself. Always transfer:\n\n"
         f"{routing_bullets}\n"

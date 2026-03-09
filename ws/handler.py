@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from google import genai
 from google.genai import types as genai_types
+from google.adk.events import Event, EventActions
 from fastapi import WebSocket, WebSocketDisconnect
 from orchestrator.adk_runner import get_runner, session_service
 from services.conversation_logger import conversation_logger
@@ -400,6 +401,39 @@ async def websocket_endpoint(websocket: WebSocket, lang: str = "en", user_id: st
         # ── Main message loop ─────────────────────────────────────────────
         while True:
             data = await websocket.receive_json()
+
+            # ── Language change request from widget ───────────────────────
+            if data.get("type") == "lang_change":
+                new_lang = data.get("lang", "")[:2].lower()
+                if new_lang in LANG_NAMES:
+                    supported_lang = new_lang
+                    lang_name = LANG_NAMES[new_lang]
+                    if session_id is not None:
+                        try:
+                            session = await session_service.get_session(
+                                app_name="stayforlong",
+                                user_id=user_id,
+                                session_id=session_id,
+                            )
+                            if session:
+                                state_event = Event(
+                                    author="system",
+                                    invocation_id=f"lang_change_{new_lang}",
+                                    actions=EventActions(state_delta={
+                                        "lang": supported_lang,
+                                        "lang_name": lang_name,
+                                    }),
+                                )
+                                await session_service.append_event(session, state_event)
+                        except Exception as exc:
+                            logger.warning("lang_change session update failed: %s", exc)
+                    await websocket.send_json({
+                        "type":      "lang_changed",
+                        "lang":      supported_lang,
+                        "lang_name": lang_name,
+                    })
+                continue
+
             user_message = data.get("message", "").strip()
             if not user_message:
                 continue

@@ -29,6 +29,7 @@ from langdetect import detect as _langdetect, LangDetectException
 from langdetect import DetectorFactory as _DetectorFactory
 _DetectorFactory.seed = 42  # deterministic results
 
+from google.adk.events import Event, EventActions
 from orchestrator.adk_runner import get_runner, session_service
 from services.conversation_logger import conversation_logger
 import config
@@ -372,13 +373,15 @@ async def voice_websocket_endpoint(
         await websocket.send_json({"type": "typing", "agent": "Stayforlong"})
 
         # ── 5. ADK streaming + sentence-level TTS pipeline ────────────────
-        # Inject per-turn language directive so agents respond in the detected
-        # language, overriding the session-level lang_name (fixed at connection).
+        # Language is locked to the session lang (agents use {lang_name} from
+        # session state). If the transcript is in a different language, notify
+        # the widget so it can offer a switch via banner — never auto-switch.
         if detected_lang != supported_lang:
-            detected_lang_name = _LANG_NAMES.get(detected_lang, "English")
-            message_text = f"[Respond in {detected_lang_name}]\n{transcript}"
-        else:
-            message_text = transcript
+            await websocket.send_json({
+                "type":     "lang_detect",
+                "detected": detected_lang,
+            })
+        message_text = transcript
         content = genai_types.Content(
             role="user",
             parts=[genai_types.Part(text=message_text)],
@@ -400,7 +403,7 @@ async def voice_websocket_endpoint(
                     break
                 text_chunk, = item
                 audio_bytes_out = await asyncio.to_thread(
-                    _synthesize, text_chunk, detected_lang
+                    _synthesize, text_chunk, supported_lang
                 )
                 if audio_bytes_out:
                     await websocket.send_json({
@@ -493,6 +496,38 @@ async def voice_websocket_endpoint(
             # ── Barge-in: cancel active pipeline ──────────────────────────────
             if msg_type == "interrupt":
                 await _cancel_pipeline()
+                continue
+
+            # ── Language change request from widget ───────────────────────
+            if msg_type == "lang_change":
+                new_lang = data.get("lang", "")[:2].lower()
+                if new_lang in _VOICE_MAP:
+                    supported_lang = new_lang
+                    lang_name = _LANG_NAMES[new_lang]
+                    if session_id is not None:
+                        try:
+                            session = await session_service.get_session(
+                                app_name="stayforlong",
+                                user_id=user_id,
+                                session_id=session_id,
+                            )
+                            if session:
+                                state_event = Event(
+                                    author="system",
+                                    invocation_id=f"lang_change_{new_lang}",
+                                    actions=EventActions(state_delta={
+                                        "lang": supported_lang,
+                                        "lang_name": lang_name,
+                                    }),
+                                )
+                                await session_service.append_event(session, state_event)
+                        except Exception as exc:
+                            logger.warning("lang_change session update failed: %s", exc)
+                    await websocket.send_json({
+                        "type":      "lang_changed",
+                        "lang":      supported_lang,
+                        "lang_name": lang_name,
+                    })
                 continue
 
             audio_b64: str = data.get("audio_b64", "")

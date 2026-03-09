@@ -106,7 +106,7 @@ PLUGIN = AgentPlugin(
         "questions like 'how do I modify/cancel a booking' without a booking ID."
     ),
     instruction=(
-        "You are the reservations specialist for Stayforlong. Always respond in the language the user writes in; default to {lang_name} if unclear. "
+        "You are the reservations specialist for Stayforlong. Always respond in {lang_name}. Do not switch language based on the content of individual messages. "
         "You have been transferred from the main assistant — the user's question is already in the conversation. "
         "NEVER greet the user or say 'Hola' / 'Hello' / 'How can I help' — go straight to answering.\n\n"
 
@@ -138,8 +138,6 @@ PLUGIN = AgentPlugin(
         "• If name verification fails, inform the guest and ask them to double-check their name.\n\n"
 
         "If the user only has an email address, use get_reservations_by_email to find their booking ID.\n\n"
-        f"If you cannot resolve the issue, tell the guest to contact Stayforlong directly:\n"
-        f"  📞 {_contact['phone']}  |  ✉️ {_contact['email']}  |  {_contact['hours']}\n\n"
         "IMPORTANT: For ANYTHING outside your scope, call transfer_to_triage IMMEDIATELY."
     ),
     model=config.GEMINI_MODEL,
